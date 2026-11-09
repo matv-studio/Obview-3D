@@ -337,6 +337,14 @@ impl Ui {
     pub fn press_started(&self, id: Id) -> bool {
         self.press_started && self.active == Some(id)
     }
+    /// Un élément est-il tenu (glisser d'un curseur, d'une barre de défilement) ?
+    pub fn is_active_any(&self) -> bool {
+        self.active.is_some()
+    }
+    /// Un champ de saisie a-t-il le focus (les raccourcis à une touche sont alors ignorés) ?
+    pub fn text_focused(&self) -> bool {
+        self.focus.is_some()
+    }
     pub fn is_active(&self, id: Id) -> bool {
         self.active == Some(id)
     }

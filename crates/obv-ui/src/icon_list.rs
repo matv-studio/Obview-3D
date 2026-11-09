@@ -18,6 +18,7 @@ pub(crate) static ICONS: &[(&str, &str)] = &[
     ("chevrons-up-down", include_str!("../assets/icons/chevrons-up-down.svg")),
     ("circle-alert", include_str!("../assets/icons/circle-alert.svg")),
     ("circle-check", include_str!("../assets/icons/circle-check.svg")),
+    ("circle-dot", include_str!("../assets/icons/circle-dot.svg")),
     ("cog", include_str!("../assets/icons/cog.svg")),
     ("command", include_str!("../assets/icons/command.svg")),
     ("component", include_str!("../assets/icons/component.svg")),

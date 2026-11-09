@@ -67,17 +67,29 @@ pub struct DrawList {
     pub prims: Vec<Prim>,
     clips: Vec<Rect>,
     pub scale: f32,
+    /// Rotation appliquée aux glyphes et icônes : pivot (pixels de l'écran) et angle (radians).
+    rotation: Option<([f32; 2], f32)>,
 }
 
 impl DrawList {
     pub fn new(scale: f32) -> Self {
-        DrawList { prims: Vec::new(), clips: vec![Rect::INFINITE], scale }
+        DrawList { prims: Vec::new(), clips: vec![Rect::INFINITE], scale, rotation: None }
     }
 
     pub fn clear(&mut self, scale: f32) {
         self.prims.clear();
         self.clips.truncate(1);
         self.scale = scale;
+        self.rotation = None;
+    }
+
+    /// Fait tourner le texte et les icônes dessinés ensuite autour de `pivot` (pixels logiques), d'un angle en
+    /// radians (sens horaire à l'écran). La découpe ne s'applique pas au texte tourné.
+    pub fn set_rotation(&mut self, pivot: Vec2, angle: f32) {
+        self.rotation = Some(([pivot.x * self.scale, pivot.y * self.scale], angle));
+    }
+    pub fn clear_rotation(&mut self) {
+        self.rotation = None;
     }
 
     fn clip(&self) -> [f32; 4] {
@@ -190,7 +202,10 @@ impl DrawList {
             radii: [0.0; 4],
             color0: color.premul(),
             color1: color.premul(),
-            border: [0.0; 4],
+            border: match self.rotation {
+                Some((p, a)) => [a, p[0], p[1], 1.0],
+                None => [0.0; 4],
+            },
             uv,
             params: [0.0, 0.0, KIND_COVERAGE, gamma],
         });

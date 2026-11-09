@@ -13,6 +13,8 @@ obv-io = { path = "../../crates/obv-io" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
+winit = "0.30"
+rayon = "1"
 
 [dev-dependencies]
 png.workspace = true

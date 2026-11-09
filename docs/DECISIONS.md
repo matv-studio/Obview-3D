@@ -102,3 +102,33 @@ Couleur, Normales, Topologie, Rayons X, Arêtes. Nombre de triangles et de somme
 ## D-16 · Écran de référence 16:9 (09/11/2026)
 Demande de l'utilisateur : l'interface est réglée d'abord pour le 16:9 ; captures de référence en 1920 × 1080,
 contrôle en 2560 × 1440 (échelle 1,25 à 1,5).
+
+## D-17 · Fenêtre, navigation et sélection au pixel (09/11/2026)
+- Fenêtre winit 0.30 ; présentation Vulkan maison (`obv-gpu/swapchain.rs`) : deux images en vol, un sémaphore
+  « rendu terminé » par image de la chaîne, MAILBOX si l'écran le propose (latence basse), sinon FIFO ; image
+  rendue seulement sur entrée, animation ou chargement (aucun calcul à vide).
+- Sélection au pixel par le GPU (`SceneRenderer::pick`) : la scène est rendue dans une cible d'un pixel avec une
+  projection restreinte à ce pixel ; on relit le triangle et la profondeur, d'où le point exact de la surface.
+  Coût indépendant de la taille de la fenêtre ; sert à la sélection, au pivot d'orbite et au zoom vers le pointeur.
+  L'indice du triangle passe du nuanceur de sommets au fragment (`gl_PrimitiveID` exigerait `geometryShader`).
+- Navigation (`apps/obview/navigation.rs`) : orbite autour du point visé, zoom qui garde fixe le point sous le
+  pointeur (mise à l'échelle autour de ce point : on ne bute jamais sur la cible), panoramique qui suit le
+  pointeur à la profondeur saisie ; transitions de 0,28 s (vues prédéfinies, cadrage) en interpolant la distance
+  en logarithme ; pavé numérique façon Blender (1, 3, 7, Ctrl pour l'opposé, 0 vue isométrique).
+- Les appuis éclair et les modificateurs d'une frappe sont gardés jusqu'à l'image suivante (un clic ou un
+  Ctrl+F reçus en un seul lot d'événements ne se perdent pas).
+
+## D-18 · Rendus de l'inspecteur (09/11/2026)
+- Constantes poussées limitées à 128 octets (minimum garanti par Vulkan ; certains pilotes AMD n'offrent pas
+  plus).
+- Bandes réparties sur la sphère englobante projetée du modèle (resserrée à 72 %) plutôt que sur la largeur de la
+  vue : chaque rendu montre une partie du modèle, et les bandes ne bougent pas pendant l'orbite.
+- Fond gris identique dans les deux thèmes (noms en blanc et lueur additive des rayons X lisibles).
+- Arêtes : arêtes vives (angle ≥ 30°, bords libres, arêtes non variétés) toujours tracées ; arêtes douces
+  (entre 1° et 30°) tracées seulement sur le contour apparent, test fait à chaque image dans le nuanceur à partir
+  des normales des deux faces : contours exacts des cylindres sans passe de détection d'image. Tracé en
+  rectangles de largeur constante à l'écran, bord adouci, léger décalage de profondeur.
+- Topologie : fil de fer par coordonnées barycentriques (`gl_VertexIndex % 3`), largeur constante à l'écran.
+- Rayons X : lueur additive, plus forte vue de biais, sans tri ni écriture de profondeur.
+- Noms des rendus le long des traits : texte tourné (rotation des glyphes dans le nuanceur de l'interface).
+

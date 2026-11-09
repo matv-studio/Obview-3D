@@ -11,6 +11,7 @@ use obv_ui::{
 };
 
 use crate::{
+    inspector::{self, Inspector},
     settings::{Settings, ThemeChoice, Units},
     settings_ui, viewcube,
 };
@@ -55,6 +56,10 @@ pub struct AppState {
     pub left_tab: usize,
     pub search: String,
     pub camera: Camera,
+    /// Vues de rendu (D-15).
+    pub inspector: Inspector,
+    /// Boîte englobante du modèle (unités du fichier).
+    pub scene_bounds: Option<([f32; 3], [f32; 3])>,
     /// Rectangle de la vue 3D après la dernière mise en page (pixels logiques).
     pub viewport: Rc<Cell<Rect>>,
 }
@@ -92,6 +97,8 @@ impl AppState {
             left_tab: 0,
             search: String::new(),
             camera: Camera::default(),
+            inspector: Inspector::Off,
+            scene_bounds: model.bounds(),
             viewport: Rc::new(Cell::new(Rect::ZERO)),
         }
     }
@@ -334,7 +341,7 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
         tool(ui, Tool::Section, "scissors", "Coupe", "C"),
         tool(ui, Tool::Explode, "ungroup", "Vue éclatée", "E"),
         widgets::toolbar_separator(ui),
-        widgets::icon_button(ui, Id::new("rendu"), "blend", "Mode de rendu", Some("R"), false),
+        widgets::icon_button(ui, Id::new("rendu"), "blend", "Vues de rendu", Some("R"), s.inspector != Inspector::Off),
         widgets::icon_button(ui, Id::new("projection"), "view", "Perspective ou orthographique", Some("P"), false),
         widgets::icon_button(ui, Id::new("capture"), "camera", "Capture", None, false),
         widgets::toolbar_separator(ui),
@@ -344,7 +351,11 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
     let rect_cell = s.viewport.clone();
     let (yaw, pitch) = (s.camera.yaw as f32, s.camera.pitch as f32);
     let theme = ui.theme.clone();
-    let mut root = Node::stack().fill().child(Node::custom(move |_, r| rect_cell.set(r)).fill()).child(toolbar);
+    let mut root = Node::stack().fill().child(Node::custom(move |_, r| rect_cell.set(r)).fill());
+    if let Some(layer) = inspector::overlay(ui, s) {
+        root.push(layer);
+    }
+    root.push(toolbar);
     if s.settings.view_cube {
         root.push(
             Node::custom(move |p, r| viewcube::paint(p, r, yaw, pitch, &theme))
@@ -387,6 +398,25 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     }
     if !s.settings_open && ctrl && ui.input.keys.contains(&Key::Char('f')) {
         ui.focus(Id::new("recherche"));
+    }
+    let plain = !ctrl && !ui.text_focused() && !s.settings_open;
+    if ui.clicked(Id::new("rendu")) || (plain && ui.input.keys.contains(&Key::Char('r'))) {
+        s.inspector = if s.inspector == Inspector::Off { Inspector::Bands } else { Inspector::Off };
+    }
+    if ui.clicked(Id::new("inspecteur retour")) {
+        s.inspector = Inspector::Bands;
+    } else if !s.settings_open && ui.escape_pressed() {
+        s.inspector = match s.inspector {
+            Inspector::Single(_) => Inspector::Bands,
+            _ => Inspector::Off,
+        };
+    }
+    if plain {
+        for (k, t) in [('v', Tool::Select), ('m', Tool::Measure), ('c', Tool::Section), ('e', Tool::Explode)] {
+            if ui.input.keys.contains(&Key::Char(k)) {
+                s.tool = t;
+            }
+        }
     }
     for t in [Tool::Select, Tool::Measure, Tool::Section, Tool::Explode] {
         if ui.clicked(Id::new("outil").with(t as u8)) {

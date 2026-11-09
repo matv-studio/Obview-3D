@@ -85,6 +85,12 @@ Dépôt
   de profondeur : sinon erreur de validation VUID-vkCmdDraw-dynamicRenderingUnusedAttachments-08914.
 - L'interface est dessinée après la 3D : aucun fond sur les nœuds qui recouvrent la vue (la couleur de fond de la
   fenêtre vient de l'effacement de la cible).
+- Constantes poussées : 128 octets au plus (minimum garanti ; pilotes AMD). `gl_PrimitiveID` dans un fragment exige
+  `geometryShader` : passer l'indice du triangle depuis le nuanceur de sommets.
+- Fenêtre sous Xvfb : `Xvfb :99 -screen 0 1920x1080x24 &`, `DISPLAY=:99 XDG_CONFIG_HOME=/tmp/obvcfg
+  target/debug/obview --validation &`, puis `xdotool search --name "Obview 3D"` et `xdotool windowfocus <id>`
+  (sans gestionnaire de fenêtres, le clavier n'arrive pas sinon) ; capture : `import -window root fichier.png`.
+  `OBV_DEBUG_KEYS=1` affiche les touches reçues.
 - Captures : `cargo test -p obview --test shell` (références dans `apps/obview/tests/reference`,
   `OBV_UPDATE_REFERENCE=1` pour les réécrire) ; fichier local à l'échelle 2 :
   `OBV_SAMPLE_GLB=<fichier.glb> OBV_SELECT=<n> cargo test -p obview --test shell captures_fichier_local -- --ignored`.

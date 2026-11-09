@@ -11,6 +11,8 @@ gpu-allocator.workspace = true
 bytemuck.workspace = true
 thiserror.workspace = true
 log.workspace = true
+ash-window = "0.13"
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 glam.workspace = true

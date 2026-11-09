@@ -206,6 +206,21 @@ fn reglages_liste_ouverte() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
+/// Vues de rendu (D-15) : bandes, puis deux rendus isolés.
+#[test]
+fn inspecteur_deux_themes() {
+    use obv_render::RenderMode;
+    use obview::inspector::Inspector;
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let bands = Shot { setup: |s| s.inspector = Inspector::Bands, ..Default::default() };
+    shoot(&gpu, &model, &both(bands, "inspecteur_sombre", "inspecteur_clair"));
+    let topo = Shot { setup: |s| s.inspector = Inspector::Single(RenderMode::Topology), ..Default::default() };
+    let edges = Shot { setup: |s| s.inspector = Inspector::Single(RenderMode::Edges), ..Default::default() };
+    shoot(&gpu, &model, &[Shot { name: "inspecteur_topologie", ..topo }, Shot { name: "inspecteur_aretes", ..edges }]);
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
 /// Captures sur un fichier local (`OBV_SAMPLE_GLB`), à l'échelle 2, sans référence : `cargo test -- --ignored`.
 #[test]
 #[ignore]

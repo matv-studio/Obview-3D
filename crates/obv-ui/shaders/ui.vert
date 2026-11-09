@@ -29,11 +29,20 @@ void main() {
         lo = p.rect.xy - 1.0;
         hi = p.rect.zw + 1.0;
     }
-    // Découpe : la géométrie elle-même est réduite au rectangle de découpe.
-    lo = max(lo, p.clip.xy);
-    hi = max(min(hi, p.clip.zw), lo);
+    bool rotated = kind == KIND_COVERAGE && p.border.w > 0.5;
+    if (!rotated) {
+        // Découpe : la géométrie elle-même est réduite au rectangle de découpe.
+        lo = max(lo, p.clip.xy);
+        hi = max(min(hi, p.clip.zw), lo);
+    }
     vec2 pos = mix(lo, hi, CORNERS[gl_VertexIndex]);
     v_index = gl_InstanceIndex;
+    // Le fragment lit l'atlas d'après la position non tournée ; seule la position à l'écran tourne.
     v_pos = pos;
+    if (rotated) {
+        float c = cos(p.border.x), s = sin(p.border.x);
+        vec2 d = pos - p.border.yz;
+        pos = p.border.yz + vec2(c * d.x - s * d.y, s * d.x + c * d.y);
+    }
     gl_Position = vec4(pos / pc.screen * 2.0 - 1.0, 0.0, 1.0);
 }
