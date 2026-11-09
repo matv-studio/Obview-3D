@@ -17,7 +17,7 @@ pub fn read_stl(path: &Path) -> Result<Model, ReadError> {
     let map = unsafe { memmap2::Mmap::map(&file)? };
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let mesh = parse_stl(&map)?;
-    Ok(Model { parts: vec![Part { name, mesh }], unit_m: 0.001 })
+    Ok(Model { parts: vec![Part { name, mesh }], unit_m: 0.001, ..Default::default() })
 }
 
 /// Décode un STL depuis la mémoire (binaire si la taille correspond, texte sinon).

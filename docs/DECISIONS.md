@@ -185,3 +185,24 @@ survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser
 - En suspens : écart encore à ≈ 2× l'optimum théorique sur les surfaces courbes ; piste : ajustement final
   des sommets vers la surface d'origine (moindres carrés sur les échantillons), ou remaillage isotrope.
 
+## D-23 · Matériaux, textures, compression GLB (09/11/2026)
+- Modèle interne : coordonnées de texture par sommet, plages d'indices par matériau (`SubMesh`), matériaux
+  métal-rugosité (couleurs linéaires, cinq cartes), textures gardées encodées telles quelles (PNG, JPEG,
+  WebP, KTX2) : aucune recompression non demandée.
+- Lecture : GLB / glTF (images intégrées, `data:` ou voisines, `EXT_texture_webp`, `KHR_texture_basisu`,
+  `EXT_meshopt_compression` et `KHR_mesh_quantization` décodés), OBJ + MTL (Kd, d/Tr, Ns → rugosité, Pr/Pm,
+  Ke, cartes), FBX par ufbx (modèles Phong, Lambert, Arnold, Standard Surface ramenés au métal-rugosité ;
+  textures intégrées ou voisines ; transparence Phong).
+- Simplification : sommets jamais partagés entre matériaux (dédoublés au besoin) ⇒ chaque triangle reste dans
+  son matériau ; coordonnées de texture pondérées (1/20 de l'image ≈ la tolérance), mises à jour par le
+  placement optimal.
+- Écriture : GLB (images intégrées, un primitif par matériau) ; OBJ + MTL + images voisines ; FBX 7.4 avec
+  matériaux Phong (plus propriétés Metallic / Roughness), textures intégrées (Video/Content), couche UV et
+  couche matériau par polygone. Tous relus dans les essais (lecteurs d'Obview et ufbx).
+- Compression GLB (réglage, actif par défaut) : positions quantifiées sur 16 bits à échelle uniforme (normales
+  non déformées) seulement si le pas reste sous le quart de l'écart accepté, normales octaédriques 8 bits,
+  UV 16 bits normalisées si elles restent dans [0, 1], puis codec meshoptimizer (version 0 des sommets, celle
+  d'`EXT_meshopt_compression`) avec tampon de repli décrit. Montre, 0,02 mm : 9,4 Mo → 3,6 Mo.
+- Visionneuse : couleur de base du premier matériau de chaque pièce. En suspens : affichage des textures dans
+  la vue, compression des images (KTX2 / Basis), matériaux par plage dans la vue.
+

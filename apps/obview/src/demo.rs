@@ -61,5 +61,5 @@ pub fn bracket() -> Model {
     for (i, (x, z)) in [(-1.6, -0.9), (1.6, -0.9), (-1.6, 0.9), (1.6, 0.9)].into_iter().enumerate() {
         parts.push(Part { name: format!("Vis M6 · {}", i + 1), mesh: cylinder([x, 0.2, z], 0.16, 0.12, 32) });
     }
-    Model { parts, unit_m: 0.01 }
+    Model { parts, unit_m: 0.01, ..Default::default() }
 }

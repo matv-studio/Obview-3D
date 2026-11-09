@@ -20,11 +20,16 @@ pub struct MeshReport {
     pub deviation: f32,
 }
 
+/// Sommet de travail : position, normale, coordonnées de texture, matériau (sans octets de remplissage : 9 × 4).
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 struct Vertex {
     p: [f32; 3],
     n: [f32; 3],
+    uv: [f32; 2],
+    /// Indice de matériau + 1 (0 : sans matériau). Les sommets ne sont jamais partagés entre matériaux : la
+    /// simplification garde donc chaque triangle dans son matériau (coutures préservées).
+    mat: u32,
 }
 
 /// Écart de Hausdorff approché par échantillons : sommets et centres des triangles de chaque surface, distance à
@@ -112,10 +117,36 @@ pub fn optimize_mesh_with(mesh: &Mesh, params: SimplifyParams) -> (Mesh, MeshRep
         let diag = (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f32>().sqrt();
         snap_positions(&mut positions, diag * 1e-6);
     }
-    // Soudure exacte des sommets identiques (position et normale).
-    let verts: Vec<Vertex> = positions.iter().zip(&mesh.normals).map(|(p, n)| Vertex { p: *p, n: *n }).collect();
-    let (unique, remap) = meshopt::generate_vertex_remap(&verts, Some(&mesh.indices));
-    let mut indices = meshopt::remap_index_buffer(Some(&mesh.indices), verts.len(), &remap);
+    // Matériau de chaque sommet (d'après les plages) ; soudure exacte des sommets identiques.
+    let has_uv = mesh.uvs.len() == mesh.positions.len() && !mesh.uvs.is_empty();
+    let mut vmat = vec![0u32; positions.len()];
+    for g in &mesh.submeshes {
+        for &i in &mesh.indices[g.first as usize..(g.first + g.count) as usize] {
+            vmat[i as usize] = g.material.map(|m| m + 1).unwrap_or(0);
+        }
+    }
+    // Un sommet partagé par deux matériaux est dédoublé (sinon la plage d'un triangle serait ambiguë).
+    let mut extra: Vec<Vertex> = Vec::new();
+    let mut idx_in = mesh.indices.clone();
+    let base_count = positions.len();
+    let make = |i: usize, mat: u32| Vertex {
+        p: positions[i],
+        n: mesh.normals[i],
+        uv: if has_uv { mesh.uvs[i] } else { [0.0; 2] },
+        mat,
+    };
+    for g in &mesh.submeshes {
+        let m = g.material.map(|m| m + 1).unwrap_or(0);
+        for i in &mut idx_in[g.first as usize..(g.first + g.count) as usize] {
+            if vmat[*i as usize] != m {
+                extra.push(make(*i as usize, m));
+                *i = (base_count + extra.len() - 1) as u32;
+            }
+        }
+    }
+    let verts: Vec<Vertex> = (0..base_count).map(|i| make(i, vmat[i])).chain(extra).collect();
+    let (unique, remap) = meshopt::generate_vertex_remap(&verts, Some(&idx_in));
+    let mut indices = meshopt::remap_index_buffer(Some(&idx_in), verts.len(), &remap);
     let mut verts = meshopt::remap_vertex_buffer(&verts, unique, &remap);
 
     let mut deviation = 0.0;
@@ -138,35 +169,38 @@ pub fn optimize_mesh_with(mesh: &Mesh, params: SimplifyParams) -> (Mesh, MeshRep
         }
         // Poids des normales, à l'échelle de la tolérance (erreur absolue) : un écart de normale d'environ 60° pèse
         // une demi-tolérance. Assez pour éviter les plis, sans freiner la réduction des surfaces lisses.
-        let weights = [tolerance * 0.5; 3];
+        // Coordonnées de texture : un écart de 1/20 de l'image pèse la tolérance entière.
+        let uv_w = if has_uv { tolerance * 20.0 } else { 0.0 };
+        let weights = [tolerance * 0.5, tolerance * 0.5, tolerance * 0.5, uv_w, uv_w];
+        let attrs_of = |v: &Vertex| [v.n[0], v.n[1], v.n[2], v.uv[0], v.uv[1]];
         let original =
-            Mesh { positions: verts.iter().map(|v| v.p).collect(), normals: Vec::new(), indices: indices.clone() };
+            Mesh { positions: verts.iter().map(|v| v.p).collect(), indices: indices.clone(), ..Default::default() };
 
         // Un essai : indices et sommets résultants.
         let attempt = |strategy: Strategy, target: f32| -> (Vec<u32>, Vec<Vertex>) {
             match strategy {
                 Strategy::Collapse(options) => {
                     let bytes: &[u8] = unsafe {
-                        // SAFETY: `Vertex` est `repr(C)` sans octets de remplissage (six f32).
+                        // SAFETY: `Vertex` est `repr(C)` sans octets de remplissage (neuf champs de 4 octets).
                         std::slice::from_raw_parts(verts.as_ptr().cast(), verts.len() * std::mem::size_of::<Vertex>())
                     };
                     let adapter = VertexDataAdapter::new(bytes, std::mem::size_of::<Vertex>(), 0).expect("sommets");
-                    let normals: Vec<f32> = verts.iter().flat_map(|v| v.n).collect();
+                    let attrs: Vec<f32> = verts.iter().flat_map(attrs_of).collect();
                     let r = meshopt::simplify_with_attributes_and_locks(
-                        &indices, &adapter, &normals, &weights, 12, &flags, 0, target, options, None,
+                        &indices, &adapter, &attrs, &weights, 20, &flags, 0, target, options, None,
                     );
                     (r, verts.clone())
                 }
                 Strategy::Update(options) => {
                     let mut idx = indices.clone();
                     let mut pos: Vec<[f32; 3]> = verts.iter().map(|v| v.p).collect();
-                    let mut nrm: Vec<f32> = verts.iter().flat_map(|v| v.n).collect();
+                    let mut attrs: Vec<f32> = verts.iter().flat_map(attrs_of).collect();
                     let n = meshopt::simplify_with_update(
                         &mut idx,
                         &mut pos,
-                        &mut nrm,
+                        &mut attrs,
                         &weights,
-                        12,
+                        20,
                         Some(&flags),
                         0,
                         target,
@@ -176,10 +210,11 @@ pub fn optimize_mesh_with(mesh: &Mesh, params: SimplifyParams) -> (Mesh, MeshRep
                     idx.truncate(n);
                     let out = pos
                         .iter()
-                        .zip(nrm.chunks_exact(3))
-                        .map(|(p, n)| {
-                            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-20);
-                            Vertex { p: *p, n: [n[0] / l, n[1] / l, n[2] / l] }
+                        .zip(attrs.chunks_exact(5))
+                        .zip(&verts)
+                        .map(|((p, a), orig)| {
+                            let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(1e-20);
+                            Vertex { p: *p, n: [a[0] / l, a[1] / l, a[2] / l], uv: [a[3], a[4]], mat: orig.mat }
                         })
                         .collect();
                     (idx, out)
@@ -198,8 +233,8 @@ pub fn optimize_mesh_with(mesh: &Mesh, params: SimplifyParams) -> (Mesh, MeshRep
                 let (cand, cand_verts) = attempt(strategy, target);
                 let simplified = Mesh {
                     positions: cand_verts.iter().map(|v| v.p).collect(),
-                    normals: Vec::new(),
                     indices: cand.clone(),
+                    ..Default::default()
                 };
                 let d = hausdorff(&original, &simplified);
                 if std::env::var_os("OBV_DEBUG_SIMPLIFY").is_some() {
@@ -238,20 +273,52 @@ pub fn optimize_mesh_with(mesh: &Mesh, params: SimplifyParams) -> (Mesh, MeshRep
             deviation = d;
         }
     }
-    // Ordre des triangles pour le cache des sommets puis le recouvrement, ordre des sommets pour la lecture.
-    meshopt::optimize_vertex_cache_in_place(&mut indices, verts.len());
+    // Triangles rangés par matériau (ordre stable), puis, dans chaque plage, ordre pour le cache des sommets et
+    // le recouvrement ; enfin ordre des sommets pour la lecture mémoire.
+    let mut tris: Vec<[u32; 3]> = indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+    tris.sort_by_key(|t| verts[t[0] as usize].mat);
+    let mut indices: Vec<u32> = tris.iter().flatten().copied().collect();
+    let mut ranges: Vec<(usize, usize, u32)> = Vec::new();
+    for (k, t) in tris.iter().enumerate() {
+        let m = verts[t[0] as usize].mat;
+        match ranges.last_mut() {
+            Some(r) if r.2 == m => r.1 += 3,
+            _ => ranges.push((k * 3, 3, m)),
+        }
+    }
     {
         let bytes: &[u8] = unsafe {
             // SAFETY: voir plus haut.
             std::slice::from_raw_parts(verts.as_ptr().cast(), verts.len() * std::mem::size_of::<Vertex>())
         };
         let adapter = VertexDataAdapter::new(bytes, std::mem::size_of::<Vertex>(), 0).expect("sommets");
-        meshopt::optimize_overdraw_in_place(&mut indices, &adapter, 1.05);
+        for &(first, count, _) in &ranges {
+            let slice = &mut indices[first..first + count];
+            meshopt::optimize_vertex_cache_in_place(slice, verts.len());
+            meshopt::optimize_overdraw_in_place(slice, &adapter, 1.05);
+        }
     }
     let kept = meshopt::optimize_vertex_fetch_in_place(&mut indices, &mut verts);
     verts.truncate(kept);
-    let out =
-        Mesh { positions: verts.iter().map(|v| v.p).collect(), normals: verts.iter().map(|v| v.n).collect(), indices };
+    let submeshes = if mesh.submeshes.is_empty() {
+        Vec::new()
+    } else {
+        ranges
+            .iter()
+            .map(|&(first, count, m)| obv_io::SubMesh {
+                first: first as u32,
+                count: count as u32,
+                material: m.checked_sub(1),
+            })
+            .collect()
+    };
+    let out = Mesh {
+        positions: verts.iter().map(|v| v.p).collect(),
+        normals: verts.iter().map(|v| v.n).collect(),
+        uvs: if has_uv { verts.iter().map(|v| v.uv).collect() } else { Vec::new() },
+        indices,
+        submeshes,
+    };
     let report =
         MeshReport { triangles_in, triangles_out: out.triangle_count(), vertices_out: out.positions.len(), deviation };
     (out, report)

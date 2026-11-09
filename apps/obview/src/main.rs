@@ -2,7 +2,8 @@
 //!
 //! - `obview [fichier]` ouvre la fenêtre (avec `--validation` : couche de validation Vulkan) ;
 //! - `obview --info` affiche l'appareil Vulkan retenu ;
-//! - `obview --convertir <entrée> <sortie.glb|obj|fbx> [--ecart <mm>]` convertit sans fenêtre.
+//! - `obview --convertir <entrée> <sortie.glb|obj|fbx> [--ecart <mm>] [--sans-silhouette] [--sans-compression]`
+//!   convertit sans fenêtre.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -55,6 +56,7 @@ fn convert(args: &[String]) -> Result<(), String> {
         format,
         tolerance_m: tol_mm / 1000.0,
         keep_silhouette: !args.iter().any(|a| a == "--sans-silhouette"),
+        compress: !args.iter().any(|a| a == "--sans-compression"),
     };
     let r = obv_mesh::convert(&model, out, opts, &|_| {}).map_err(|e| e.to_string())?;
     println!(

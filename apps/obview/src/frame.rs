@@ -66,10 +66,10 @@ pub fn draw_viewport(
 
 const STEEL: [u8; 4] = [0xc9, 0xcc, 0xd1, 0xff];
 
-/// Teinte de sélection : acier mêlé d'accent, pour garder la lecture des volumes.
-fn selection_tint(accent: [u8; 4]) -> [u8; 4] {
+/// Teinte de sélection : couleur de la pièce mêlée d'accent, pour garder la lecture des volumes.
+fn selection_tint(base: [u8; 4], accent: [u8; 4]) -> [u8; 4] {
     let m = |a: u8, b: u8| ((a as f32) * 0.45 + (b as f32) * 0.55).round() as u8;
-    [m(STEEL[0], accent[0]), m(STEEL[1], accent[1]), m(STEEL[2], accent[2]), 255]
+    [m(base[0], accent[0]), m(base[1], accent[1]), m(base[2], accent[2]), 255]
 }
 
 /// Ce qui change la géométrie envoyée : sélection, visibilité, accent.
@@ -104,7 +104,10 @@ pub fn mesh_inputs<'a>(
             positions: &p.mesh.positions,
             normals: &p.mesh.normals,
             indices: &p.mesh.indices,
-            color: if state.selected == Some(i) { selection_tint(accent) } else { STEEL },
+            color: {
+                let base = model.display_color(i).unwrap_or(STEEL);
+                if state.selected == Some(i) { selection_tint(base, accent) } else { base }
+            },
             id: i as u32,
             edges: edges.and_then(|e| e.0.get(i)).map(Vec::as_slice).unwrap_or(&[]),
         })

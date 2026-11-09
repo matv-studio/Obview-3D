@@ -17,7 +17,7 @@ use std::{
 use obv_io::{Model, Part};
 pub use optimize::{MeshReport, SimplifyParams, hausdorff, optimize_mesh, optimize_mesh_with};
 use rayon::prelude::*;
-pub use write::{Format, encode};
+pub use write::{Format, OutputFile, WriteOptions, encode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ConvertOptions {
@@ -26,6 +26,8 @@ pub struct ConvertOptions {
     pub tolerance_m: f64,
     /// Silhouette préservée : sommets des arêtes vives prioritaires.
     pub keep_silhouette: bool,
+    /// GLB : quantification et compression meshoptimizer.
+    pub compress: bool,
 }
 
 impl ConvertOptions {
@@ -90,7 +92,10 @@ pub fn optimize_model(
         })
         .collect();
     let (parts, reports): (Vec<Part>, Vec<MeshReport>) = results.into_iter().unzip();
-    (Model { parts, unit_m: model.unit_m }, Report { parts: reports, bytes: 0 })
+    (
+        Model { parts, unit_m: model.unit_m, materials: model.materials.clone(), textures: model.textures.clone() },
+        Report { parts: reports, bytes: 0 },
+    )
 }
 
 /// Optimise puis écrit `path` (écriture dans un fichier temporaire puis renommage).
@@ -101,11 +106,22 @@ pub fn convert(
     progress: &(dyn Fn(f32) + Sync),
 ) -> std::io::Result<Report> {
     let (out, mut report) = optimize_model(model, opts.tolerance_m, opts.keep_silhouette, &|f| progress(f * 0.9));
-    let bytes = encode(&out, opts.format);
-    report.bytes = bytes.len();
-    let tmp = path.with_extension(format!("{}.tmp", opts.format.extension()));
-    std::fs::write(&tmp, &bytes)?;
-    std::fs::rename(&tmp, path)?;
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "modele".into());
+    let wopts = WriteOptions {
+        format: opts.format,
+        compress: opts.compress,
+        tolerance: (opts.tolerance_m / model.unit_m) as f32,
+    };
+    let files = encode(&out, wopts, &stem);
+    report.bytes = files.iter().map(|f| f.data.len()).sum();
+    let dir = path.parent().unwrap_or(Path::new("."));
+    for (i, f) in files.iter().enumerate() {
+        // Le fichier principal prend exactement le chemin choisi ; les fichiers associés vont à côté.
+        let target = if i == 0 { path.to_path_buf() } else { dir.join(&f.name) };
+        let tmp = target.with_extension("obv-tmp");
+        std::fs::write(&tmp, &f.data)?;
+        std::fs::rename(&tmp, &target)?;
+    }
     progress(1.0);
     Ok(report)
 }

@@ -28,6 +28,8 @@ pub struct ConvertState {
     pub tolerance_mm: f64,
     pub tolerance_text: String,
     pub keep_silhouette: bool,
+    /// GLB : quantification et compression meshoptimizer.
+    pub compress: bool,
     /// L'écart a été initialisé pour le modèle ouvert.
     pub initialized: bool,
     pub status: Status,
@@ -42,6 +44,7 @@ impl Default for ConvertState {
             tolerance_mm: 0.0,
             tolerance_text: String::new(),
             keep_silhouette: true,
+            compress: true,
             initialized: false,
             status: Status::Idle,
         }
@@ -328,7 +331,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         footer.push(b);
     }
     let body = Node::column().align(Align::Stretch).child(body);
-    let (node, close) = controls::modal(ui, Id::new("convertir"), "Convertir", (640.0, 430.0), body, footer);
+    let (node, close) = controls::modal(ui, Id::new("convertir"), "Convertir", (640.0, 482.0), body, footer);
     if close && !running {
         s.convert.open = false;
     }

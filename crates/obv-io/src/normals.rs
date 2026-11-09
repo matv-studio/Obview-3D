@@ -48,6 +48,31 @@ pub fn from_triangle_soup(corners: &[V3], crease_deg: f32) -> Mesh {
 
 /// Normales lissées pour un maillage indexé dont les sommets sont déjà uniques par position.
 pub fn smooth(positions: &[V3], indices: &[u32], crease_deg: f32) -> Mesh {
+    let corner_normals = corner_normals(positions, indices, crease_deg);
+    // Sommets de sortie : un par (position, normale) distincts.
+    let mut out = Mesh::default();
+    let mut map: HashMap<(u32, [u32; 3]), u32> = HashMap::with_capacity(positions.len() * 2);
+    out.indices = indices
+        .iter()
+        .zip(&corner_normals)
+        .map(|(&v, n)| {
+            *map.entry((v, pos_key(*n))).or_insert_with(|| {
+                out.positions.push(positions[v as usize]);
+                out.normals.push(*n);
+                (out.positions.len() - 1) as u32
+            })
+        })
+        .collect();
+    out
+}
+
+/// Clé exacte d'un vecteur (soudure).
+pub fn vec_key(v: V3) -> [u32; 3] {
+    pos_key(v)
+}
+
+/// Normale lissée de chaque coin (une par indice), sommets soudés par indice de position.
+pub fn corner_normals(positions: &[V3], indices: &[u32], crease_deg: f32) -> Vec<V3> {
     let tri_count = indices.len() / 3;
     let cos_crease = crease_deg.to_radians().cos();
     // Normale unitaire de chaque face, et poids de chaque coin (angle au sommet × aire, à la Thürrner-Wüthrich
@@ -99,21 +124,7 @@ pub fn smooth(positions: &[V3], indices: &[u32], crease_deg: f32) -> Mesh {
             if n == [0.0; 3] { nf } else { n }
         })
         .collect();
-    // Sommets de sortie : un par (position, normale) distincts.
-    let mut out = Mesh::default();
-    let mut map: HashMap<(u32, [u32; 3]), u32> = HashMap::with_capacity(positions.len() * 2);
-    out.indices = indices
-        .iter()
-        .zip(&corner_normals)
-        .map(|(&v, n)| {
-            *map.entry((v, pos_key(*n))).or_insert_with(|| {
-                out.positions.push(positions[v as usize]);
-                out.normals.push(*n);
-                (out.positions.len() - 1) as u32
-            })
-        })
-        .collect();
-    out
+    corner_normals
 }
 
 #[cfg(test)]

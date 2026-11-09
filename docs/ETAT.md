@@ -3,7 +3,7 @@
 Mis à jour : 09/11/2026.
 
 ## Fait
-- Décisions D-01 à D-22 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-23 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -43,7 +43,8 @@ Mis à jour : 09/11/2026.
 ## Prochaines étapes
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
 2. Fichiers récents ; menu contextuel de la vue (isoler, masquer, cadrer).
-3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie.
+3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie ;
+   textures et matériaux par plage dans la vue.
 4. Conversion : ajustement final des sommets sur la surface d'origine (formes arrondies).
 5. Grappes et niveaux de détail ; tri GPU ; mesh shaders.
 6. STEP / IGES par OpenCASCADE 8.0.1 (paquets conda-forge, pont cxx) : arbre d'assemblage, noms, couleurs,

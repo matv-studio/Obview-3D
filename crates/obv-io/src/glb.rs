@@ -1,11 +1,14 @@
-//! glTF 2.0 binaire : en-tête, bloc JSON, bloc binaire ; nœuds et transformations, accesseurs avec pas.
+//! glTF 2.0 binaire : en-tête, bloc JSON, bloc binaire ; nœuds et transformations, accesseurs avec pas,
+//! matériaux métal-rugosité, textures (intégrées, en `data:` ou en fichiers voisins), coordonnées de texture,
+//! compression `EXT_meshopt_compression` et quantification `KHR_mesh_quantization`.
 
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
+use base64::Engine;
 use rayon::prelude::*;
 use serde_json::Value;
 
-use crate::{Mesh, Model, Part, ReadError};
+use crate::{Material, Mesh, Model, Part, ReadError, SubMesh, Texture};
 
 fn invalid(m: impl Into<String>) -> ReadError {
     ReadError::Invalid(m.into())
@@ -76,36 +79,100 @@ fn node_matrix(n: &Value) -> Mat4 {
 
 struct Doc<'a> {
     json: Value,
-    bin: &'a [u8],
+    buffers: Vec<Cow<'a, [u8]>>,
+    /// Vues décompressées (`EXT_meshopt_compression`), par indice de vue.
+    decoded: Vec<Option<Vec<u8>>>,
+}
+
+/// Décode une vue compressée par meshoptimizer.
+fn decode_meshopt(ext: &Value, buffers: &[Cow<'_, [u8]>]) -> Result<Vec<u8>, ReadError> {
+    let buf = buffers.get(ext["buffer"].as_u64().unwrap_or(0) as usize).ok_or_else(|| invalid("tampon compressé"))?;
+    let off = ext["byteOffset"].as_u64().unwrap_or(0) as usize;
+    let len = ext["byteLength"].as_u64().unwrap_or(0) as usize;
+    let stride = ext["byteStride"].as_u64().unwrap_or(0) as usize;
+    let count = ext["count"].as_u64().unwrap_or(0) as usize;
+    let src = buf.get(off..off + len).ok_or_else(|| invalid("vue compressée hors du tampon"))?;
+    let mut out = vec![0u8; stride * count];
+    let rc = unsafe {
+        // SAFETY: `out` a la taille `count × stride` exigée ; meshoptimizer valide l'entrée (sûr pour des données
+        // non fiables, au pire des valeurs absurdes).
+        match ext["mode"].as_str().unwrap_or("") {
+            "ATTRIBUTES" => meshopt::ffi::meshopt_decodeVertexBuffer(
+                out.as_mut_ptr().cast(),
+                count,
+                stride,
+                src.as_ptr(),
+                src.len(),
+            ),
+            "TRIANGLES" => {
+                meshopt::ffi::meshopt_decodeIndexBuffer(out.as_mut_ptr().cast(), count, stride, src.as_ptr(), src.len())
+            }
+            "INDICES" => meshopt::ffi::meshopt_decodeIndexSequence(
+                out.as_mut_ptr().cast(),
+                count,
+                stride,
+                src.as_ptr(),
+                src.len(),
+            ),
+            m => return Err(invalid(format!("mode de compression inconnu : {m}"))),
+        }
+    };
+    if rc != 0 {
+        return Err(invalid("données meshoptimizer illisibles"));
+    }
+    unsafe {
+        // SAFETY: filtres appliqués en place sur `count` éléments de `stride` octets.
+        match ext["filter"].as_str().unwrap_or("NONE") {
+            "OCTAHEDRAL" => meshopt::ffi::meshopt_decodeFilterOct(out.as_mut_ptr().cast(), count, stride),
+            "QUATERNION" => meshopt::ffi::meshopt_decodeFilterQuat(out.as_mut_ptr().cast(), count, stride),
+            "EXPONENTIAL" => meshopt::ffi::meshopt_decodeFilterExp(out.as_mut_ptr().cast(), count, stride),
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 impl Doc<'_> {
+    /// Octets d'une vue (décompressée au besoin) et son pas.
+    fn view(&self, i: usize) -> Result<(&[u8], Option<usize>), ReadError> {
+        let bv = &self.json["bufferViews"][i];
+        let stride = bv["byteStride"].as_u64().map(|s| s as usize);
+        if let Some(Some(d)) = self.decoded.get(i) {
+            return Ok((d, stride));
+        }
+        let buf =
+            self.buffers.get(bv["buffer"].as_u64().unwrap_or(0) as usize).ok_or_else(|| invalid("tampon absent"))?;
+        let off = bv["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let len = bv["byteLength"].as_u64().unwrap_or(0) as usize;
+        Ok((buf.get(off..off + len).ok_or_else(|| invalid("vue hors du tampon"))?, stride))
+    }
+
     /// Valeurs d'un accesseur, converties en f64, `n` composantes par élément.
     fn floats(&self, index: usize, n: usize) -> Result<Vec<f64>, ReadError> {
         let a = &self.json["accessors"][index];
         let count = a["count"].as_u64().ok_or_else(|| invalid("accesseur sans nombre"))? as usize;
         let ctype = a["componentType"].as_u64().unwrap_or(0);
         let normalized = a["normalized"].as_bool().unwrap_or(false);
-        let bv = &self.json["bufferViews"]
-            [a["bufferView"].as_u64().ok_or_else(|| invalid("accesseur clairsemé non géré"))? as usize];
+        let (bin, stride) =
+            self.view(a["bufferView"].as_u64().ok_or_else(|| invalid("accesseur clairsemé non géré"))? as usize)?;
         let size = match ctype {
             5120 | 5121 => 1,
             5122 | 5123 => 2,
             5125 | 5126 => 4,
             _ => return Err(invalid(format!("type de composante {ctype}"))),
         };
-        let stride = bv["byteStride"].as_u64().map(|s| s as usize).unwrap_or(size * n);
-        let base = bv["byteOffset"].as_u64().unwrap_or(0) as usize + a["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let stride = stride.unwrap_or(size * n);
+        let base = a["byteOffset"].as_u64().unwrap_or(0) as usize;
         let end = base + stride * count.saturating_sub(1) + size * n;
-        if end > self.bin.len() {
-            return Err(invalid("accesseur hors du bloc binaire"));
+        if count > 0 && end > bin.len() {
+            return Err(invalid("accesseur hors de sa vue"));
         }
         let mut out = Vec::with_capacity(count * n);
         for i in 0..count {
             let p = base + i * stride;
             for k in 0..n {
                 let o = p + k * size;
-                let b = &self.bin[o..o + size];
+                let b = &bin[o..o + size];
                 let v = match ctype {
                     5126 => f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64,
                     5125 => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64,
@@ -157,6 +224,10 @@ impl Doc<'_> {
         if indices.iter().any(|&i| i as usize >= vcount) {
             return Err(invalid("indice hors des sommets"));
         }
+        let uvs: Vec<[f32; 2]> = match attrs["TEXCOORD_0"].as_u64() {
+            Some(ti) => self.floats(ti as usize, 2)?.chunks_exact(2).map(|t| [t[0] as f32, t[1] as f32]).collect(),
+            None => Vec::new(),
+        };
         let normals = match attrs["NORMAL"].as_u64() {
             Some(ni) => self
                 .floats(ni as usize, 3)?
@@ -171,7 +242,18 @@ impl Doc<'_> {
                 .collect(),
             None => flat_normals(&positions, &indices),
         };
-        Ok(Mesh { positions, normals, indices })
+        // Repère inversé (déterminant négatif) : ordre des sommets retourné, faces toujours vers l'extérieur.
+        let det = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2])
+            + m[8] * (m[1] * m[6] - m[5] * m[2]);
+        let mut indices = indices;
+        if det < 0.0 {
+            for t in indices.chunks_exact_mut(3) {
+                t.swap(1, 2);
+            }
+        }
+        let material = prim["material"].as_u64().map(|v| v as u32);
+        let count = indices.len() as u32;
+        Ok(Mesh { positions, normals, uvs, indices, submeshes: vec![SubMesh { first: 0, count, material }] })
     }
 }
 
@@ -208,28 +290,56 @@ fn flat_normals(p: &[[f32; 3]], idx: &[u32]) -> Vec<[f32; 3]> {
     n
 }
 
-/// Lit un fichier `.glb`. Chaque nœud portant un maillage devient une pièce.
+/// Lit un fichier `.glb` (ou `.gltf` avec tampons en `data:` ou en fichiers voisins). Chaque nœud portant un
+/// maillage devient une pièce.
 pub fn read_glb(path: &Path) -> Result<Model, ReadError> {
     let file = std::fs::File::open(path)?;
     // SAFETY: lecture seule ; le fichier n'est pas modifié pendant la lecture par Obview.
     let map = unsafe { memmap2::Mmap::map(&file)? };
     let data: &[u8] = &map;
-    if data.len() < 20 || &data[0..4] != b"glTF" {
-        return Err(invalid("en-tête glTF absent"));
-    }
-    let json_len = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
-    if &data[16..20] != b"JSON" || 20 + json_len > data.len() {
-        return Err(invalid("bloc JSON absent"));
-    }
-    let json: Value = serde_json::from_slice(&data[20..20 + json_len])?;
-    let bin_start = 20 + json_len;
-    let bin = if bin_start + 8 <= data.len() && &data[bin_start + 4..bin_start + 8] == b"BIN\0" {
-        let len = u32::from_le_bytes(data[bin_start..bin_start + 4].try_into().unwrap()) as usize;
-        &data[bin_start + 8..(bin_start + 8 + len).min(data.len())]
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let (json, bin): (Value, &[u8]) = if data.len() >= 20 && &data[0..4] == b"glTF" {
+        let json_len = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
+        if &data[16..20] != b"JSON" || 20 + json_len > data.len() {
+            return Err(invalid("bloc JSON absent"));
+        }
+        let json: Value = serde_json::from_slice(&data[20..20 + json_len])?;
+        let bin_start = 20 + json_len;
+        let bin = if bin_start + 8 <= data.len() && &data[bin_start + 4..bin_start + 8] == b"BIN\0" {
+            let len = u32::from_le_bytes(data[bin_start..bin_start + 4].try_into().unwrap()) as usize;
+            &data[bin_start + 8..(bin_start + 8 + len).min(data.len())]
+        } else {
+            &[][..]
+        };
+        (json, bin)
     } else {
-        &[][..]
+        (serde_json::from_slice(data)?, &[][..])
     };
-    let doc = Doc { json, bin };
+    // Tampons : le bloc binaire, puis `data:` ou fichiers voisins ; le tampon de repli de la compression peut
+    // être absent (sans `uri`).
+    let mut buffers: Vec<Cow<'_, [u8]>> = Vec::new();
+    for (i, b) in json["buffers"].as_array().cloned().unwrap_or_default().iter().enumerate() {
+        match b["uri"].as_str() {
+            Some(uri) => buffers.push(Cow::Owned(load_uri(uri, dir)?)),
+            None if i == 0 => buffers.push(Cow::Borrowed(bin)),
+            None => buffers.push(Cow::Borrowed(&[])),
+        }
+    }
+    let views = json["bufferViews"].as_array().cloned().unwrap_or_default();
+    let decoded: Result<Vec<Option<Vec<u8>>>, ReadError> = views
+        .par_iter()
+        .map(|v| {
+            match v["extensions"]
+                .get("EXT_meshopt_compression")
+                .or_else(|| v["extensions"].get("KHR_meshopt_compression"))
+            {
+                Some(ext) => decode_meshopt(ext, &buffers).map(Some),
+                None => Ok(None),
+            }
+        })
+        .collect();
+    let doc = Doc { json, buffers, decoded: decoded? };
+    let (materials, textures) = read_materials(&doc, dir);
 
     // Parcours des nœuds de la scène, transformations cumulées.
     let scene = doc.json["scene"].as_u64().unwrap_or(0) as usize;
@@ -275,13 +385,103 @@ pub fn read_glb(path: &Path) -> Result<Model, ReadError> {
             let meshes: Result<Vec<Mesh>, ReadError> = prims.par_iter().map(|p| doc.primitive(p, m)).collect();
             let mut mesh = Mesh::default();
             for sub in meshes? {
-                let base = mesh.positions.len() as u32;
-                mesh.positions.extend(sub.positions);
-                mesh.normals.extend(sub.normals);
-                mesh.indices.extend(sub.indices.into_iter().map(|i| i + base));
+                mesh.append(sub);
             }
             Ok(Part { name: name.clone(), mesh })
         })
         .collect();
-    Ok(Model { parts: parts?, unit_m: 1.0 })
+    Ok(Model { parts: parts?, unit_m: 1.0, materials, textures })
+}
+
+/// Contenu d'une adresse de tampon ou d'image : `data:…;base64,…` ou chemin relatif au fichier.
+fn load_uri(uri: &str, dir: &Path) -> Result<Vec<u8>, ReadError> {
+    if let Some(rest) = uri.strip_prefix("data:") {
+        let b64 = rest.split_once(";base64,").map(|(_, d)| d).ok_or_else(|| invalid("adresse data: sans base64"))?;
+        return base64::engine::general_purpose::STANDARD.decode(b64).map_err(|_| invalid("base64 illisible"));
+    }
+    let decoded = percent_decode(uri);
+    Ok(std::fs::read(dir.join(decoded))?)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Matériaux et textures. Une texture illisible est ignorée (le matériau garde ses couleurs).
+fn read_materials(doc: &Doc<'_>, dir: &Path) -> (Vec<Material>, Vec<Texture>) {
+    let j = &doc.json;
+    // Images → textures d'Obview, dans l'ordre des images du fichier.
+    let images = j["images"].as_array().cloned().unwrap_or_default();
+    let mut textures = Vec::with_capacity(images.len());
+    let mut image_slot: Vec<Option<u32>> = Vec::with_capacity(images.len());
+    for (i, im) in images.iter().enumerate() {
+        let data = if let Some(bv) = im["bufferView"].as_u64() {
+            doc.view(bv as usize).map(|(d, _)| d.to_vec()).ok()
+        } else if let Some(uri) = im["uri"].as_str() {
+            load_uri(uri, dir).ok()
+        } else {
+            None
+        };
+        match data {
+            Some(data) if !data.is_empty() => {
+                let mime = im["mimeType"].as_str().unwrap_or(Texture::sniff(&data)).to_string();
+                let name = im["name"].as_str().map(str::to_owned).unwrap_or_else(|| format!("image_{i}"));
+                image_slot.push(Some(textures.len() as u32));
+                textures.push(Texture { name, mime, data });
+            }
+            _ => image_slot.push(None),
+        }
+    }
+    // Texture glTF → image (source directe ou extension WebP / Basis).
+    let texture_image = |t: &Value| -> Option<u32> {
+        let tex = &j["textures"][t["index"].as_u64()? as usize];
+        let src = tex["source"]
+            .as_u64()
+            .or_else(|| tex["extensions"]["EXT_texture_webp"]["source"].as_u64())
+            .or_else(|| tex["extensions"]["KHR_texture_basisu"]["source"].as_u64())?;
+        image_slot.get(src as usize).copied().flatten()
+    };
+    let f = |v: &Value, d: f32| v.as_f64().map(|x| x as f32).unwrap_or(d);
+    let materials = j["materials"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let pbr = &m["pbrMetallicRoughness"];
+            let bc = &pbr["baseColorFactor"];
+            let em = &m["emissiveFactor"];
+            Material {
+                name: m["name"].as_str().map(str::to_owned).unwrap_or_else(|| format!("Matériau {}", i + 1)),
+                base_color: [f(&bc[0], 1.0), f(&bc[1], 1.0), f(&bc[2], 1.0), f(&bc[3], 1.0)],
+                metallic: f(&pbr["metallicFactor"], 1.0),
+                roughness: f(&pbr["roughnessFactor"], 1.0),
+                emissive: [f(&em[0], 0.0), f(&em[1], 0.0), f(&em[2], 0.0)],
+                base_color_texture: texture_image(&pbr["baseColorTexture"]),
+                metallic_roughness_texture: texture_image(&pbr["metallicRoughnessTexture"]),
+                normal_texture: texture_image(&m["normalTexture"]),
+                occlusion_texture: texture_image(&m["occlusionTexture"]),
+                emissive_texture: texture_image(&m["emissiveTexture"]),
+                double_sided: m["doubleSided"].as_bool().unwrap_or(false),
+                blend: m["alphaMode"].as_str() == Some("BLEND"),
+            }
+        })
+        .collect();
+    (materials, textures)
 }
