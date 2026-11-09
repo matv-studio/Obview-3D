@@ -64,7 +64,8 @@ pub fn draw_viewport(
     }
 }
 
-const STEEL: [u8; 4] = [0xc9, 0xcc, 0xd1, 0xff];
+/// Couleur des pièces sans matériau.
+pub const STEEL: [u8; 4] = [0xc9, 0xcc, 0xd1, 0xff];
 
 /// Teinte de sélection : couleur de la pièce mêlée d'accent, pour garder la lecture des volumes.
 fn selection_tint(base: [u8; 4], accent: [u8; 4]) -> [u8; 4] {

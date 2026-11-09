@@ -9,29 +9,39 @@ use crate::{
     widgets::text_style,
 };
 
-/// Interrupteur 32 × 18, bouton rond animé.
+/// Interrupteur de la charte (26 × 16) : trait fin ; éteint, poignée en pilule grise à gauche ; allumé, poignée
+/// verticale blanche à droite et trait de progression à la couleur d'accent jusqu'à elle (200 ms).
 pub fn toggle(ui: &mut Ui, id: Id, on: bool) -> (Node, Option<bool>) {
     let c = ui.theme.color.clone();
     let clicked = ui.clicked(id);
     let value = if clicked { !on } else { on };
-    let t = ui.anim(id.with("position"), if value { 1.0 } else { 0.0 }, 140.0);
-    let hover = ui.anim(id.with("survol"), if ui.hovered(id) { 1.0 } else { 0.0 }, 90.0);
-    let off = c.track.mix(c.border_strong, hover * 0.6);
-    let on_c = c.accent.mix(c.accent_hover, hover);
-    let track = off.mix(on_c, t);
-    let knob = c.knob;
-    let shadow = c.shadow;
+    let t = ui.anim(id.with("position"), if value { 1.0 } else { 0.0 }, 200.0);
+    let hover = ui.anim(id.with("survol"), if ui.hovered(id) { 1.0 } else { 0.0 }, 120.0);
+    let (track, faint, muted, fill, knob, ring) =
+        (c.track, c.text_tertiary, c.text_secondary, c.accent, c.knob, c.knob_ring);
+    let fill = if c.has_accent { fill } else { c.text };
     let node = Node::custom(move |p, r| {
-        let tr = Rect::from_xywh(r.min.x, r.center().y - 9.0, 32.0, 18.0);
-        p.dl.rect(tr, 9.0, track, None);
-        let x = tr.min.x + 2.0 + t * 14.0;
-        let k = Rect::from_xywh(x, tr.min.y + 2.0, 14.0, 14.0);
-        p.dl.shadow(k, 7.0, 2.0, vec2(0.0, 1.0), shadow);
-        p.dl.rect(k, 7.0, knob, None);
+        let y = r.center().y;
+        let (x0, x1) = (r.min.x + 1.0, r.min.x + 25.0);
+        // Trait fin, toute la largeur.
+        p.dl.rect(Rect::from_xywh(x0, y - 1.0, x1 - x0, 2.0), 1.0, track, None);
+        // Poignée : pilule 12 × 6 (éteint) → trait vertical 3 × 14 (allumé).
+        let w = 12.0 + (3.0 - 12.0) * t;
+        let h = 6.0 + (14.0 - 6.0) * t;
+        let cx = x0 + 6.0 + (x1 - x0 - 7.5) * t;
+        if t > 0.01 {
+            p.dl.rect(Rect::from_xywh(x0, y - 2.0, (cx - x0).max(0.0), 4.0), 2.0, fill.mul_alpha(t), None);
+        }
+        let k = Rect::from_xywh(cx - w * 0.5, y - h * 0.5, w, h);
+        let off_col = faint.mix(muted, hover);
+        let col = off_col.mix(knob, t);
+        if t > 0.5 {
+            p.dl.shadow(k, 1.5, 2.0, vec2(0.0, 1.0), ring.mul_alpha(0.6));
+        }
+        p.dl.rect(k, w.min(h) * 0.5, col, if t > 0.5 { Some((1.0, ring)) } else { None });
     })
     .id(id)
-    .cursor(Cursor::Pointer)
-    .size(Size::Px(32.0), Size::Px(20.0));
+    .size(Size::Px(26.0), Size::Px(16.0));
     (node, clicked.then_some(value))
 }
 
@@ -41,7 +51,7 @@ pub fn checkbox(ui: &mut Ui, id: Id, on: bool) -> (Node, Option<bool>) {
     let clicked = ui.clicked(id);
     let value = if clicked { !on } else { on };
     let hover = ui.hovered(id);
-    let mut n = Node::stack().id(id).cursor(Cursor::Pointer).size(Size::Px(16.0), Size::Px(16.0)).radius(4.0);
+    let mut n = Node::stack().id(id).size(Size::Px(16.0), Size::Px(16.0)).radius(4.0);
     if value {
         n = n.bg(if hover { c.accent_hover } else { c.accent }).child(Node::icon("check", 12.0, c.accent_text));
     } else {
@@ -64,20 +74,22 @@ pub fn select(ui: &mut Ui, id: Id, options: &[&str], selected: usize, width: f32
         ui.toggle_popup(id);
     }
     let open = ui.popup_open(id);
-    let bg = if open { c.raised_hover } else { ui.state_color(id, c.raised, c.raised_hover, c.raised_hover) };
+    let hover = ui.anim(id.with("survol"), if ui.hovered(id) || open { 1.0 } else { 0.0 }, 120.0);
     let current = options.get(chosen.unwrap_or(selected)).copied().unwrap_or("");
-    let trigger = Node::row()
+    let mut trigger = Node::row()
         .id(id)
-        .cursor(Cursor::Pointer)
         .width(Size::Px(width))
-        .height(Size::Px(28.0))
-        .padding(Edges { left: 10.0, right: 6.0, top: 0.0, bottom: 0.0 })
+        .height(Size::Px(ui.theme.size.control_height))
+        .padding(Edges { left: 8.0, right: 6.0, top: 0.0, bottom: 0.0 })
         .gap(6.0)
         .radius(ui.theme.size.radius_control)
-        .bg(bg)
-        .border(1.0, if open { c.accent } else { c.border })
+        .bg(c.input_bg)
+        .border(1.0, c.border_strong.mix(c.text_tertiary, hover))
         .child(Node::text(current, text_style(ui), c.text).width(Size::Fill(1.0)).truncate())
-        .child(Node::icon("chevrons-up-down", 13.0, c.text_tertiary));
+        .child(Node::icon("chevron-down", ui.theme.size.icon, c.text_secondary));
+    if open {
+        trigger = trigger.shadow(0.5, vec2(0.0, 0.0), c.focus_ring).shadow(1.5, vec2(0.0, 0.0), c.focus_ring);
+    }
 
     if open && let Some(r) = ui.rect_of(id) {
         let item_h = 28.0;
@@ -86,13 +98,12 @@ pub fn select(ui: &mut Ui, id: Id, options: &[&str], selected: usize, width: f32
         let top = if below { r.max.y + 4.0 } else { r.min.y - 4.0 - h };
         let mut menu = Node::column()
             .anchor(Anchor { left: Some(r.min.x), top: Some(top), ..Default::default() })
-            .width(Size::Px(r.width().max(160.0)))
+            .width(Size::Px(r.width().clamp(220.0, 320.0)))
             .padding(Edges::all(4.0))
-            .radius(8.0)
-            .bg(c.floating.with_alpha(1.0))
-            .border(1.0, c.border)
-            .shadow(18.0, vec2(0.0, 6.0), c.shadow)
-            .shadow(2.0, vec2(0.0, 1.0), c.shadow.mul_alpha(0.5));
+            .radius(ui.theme.size.radius_panel)
+            .bg(c.raised)
+            .border(1.0, c.border_strong)
+            .shadow(40.0, vec2(0.0, 16.0), c.shadow);
         let sel = chosen.unwrap_or(selected);
         for (i, o) in options.iter().enumerate() {
             let iid = id.with(i);
@@ -101,7 +112,6 @@ pub fn select(ui: &mut Ui, id: Id, options: &[&str], selected: usize, width: f32
             menu.push(
                 Node::row()
                     .id(iid)
-                    .cursor(Cursor::Pointer)
                     .height(Size::Px(item_h))
                     .padding(Edges::xy(8.0, 0.0))
                     .gap(8.0)
@@ -122,13 +132,30 @@ pub fn select(ui: &mut Ui, id: Id, options: &[&str], selected: usize, width: f32
     (trigger, chosen)
 }
 
-/// Curseur horizontal. `step` : pas de la valeur (0 : continu).
+/// Glissière de la charte : trait fin 2 px, progression 4 px jusqu'à la poignée (bleue si la valeur est réglée
+/// ici, c.-à-d. différente de `default`, grise sinon), poignée verticale 3 × 14, allongée au survol, anneau
+/// pendant le glisser. `step` : pas de la valeur (0 : continu).
+#[allow(clippy::too_many_arguments)]
 pub fn slider(ui: &mut Ui, id: Id, value: f32, min: f32, max: f32, step: f32, width: f32) -> (Node, Option<f32>) {
+    slider_with_default(ui, id, value, min, max, step, width, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn slider_with_default(
+    ui: &mut Ui,
+    id: Id,
+    value: f32,
+    min: f32,
+    max: f32,
+    step: f32,
+    width: f32,
+    default: Option<f32>,
+) -> (Node, Option<f32>) {
     let c = ui.theme.color.clone();
     let mut v = value;
     let mut changed = None;
     if let (Some(p), Some(r)) = (ui.dragging(id), ui.rect_of(id)) {
-        let t = ((p.x - r.min.x - 7.0) / (r.width() - 14.0)).clamp(0.0, 1.0);
+        let t = ((p.x - r.min.x - 2.0) / (r.width() - 4.0)).clamp(0.0, 1.0);
         let mut nv = min + t * (max - min);
         if step > 0.0 {
             nv = (nv / step).round() * step;
@@ -138,24 +165,35 @@ pub fn slider(ui: &mut Ui, id: Id, value: f32, min: f32, max: f32, step: f32, wi
         }
         v = nv;
     }
+    // Alt+clic : valeur par défaut (charte : « Alt+clic réinitialise »).
+    if let Some(d) = default
+        && ui.clicked(id)
+        && ui.input.modifiers.alt
+    {
+        changed = Some(d);
+        v = d;
+    }
     let t = if max > min { ((v - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
-    let hot = ui.hovered(id) || ui.is_active(id);
-    let (track, fill, knob, ring, shadow) = (c.track, c.accent, c.knob, c.focus_ring, c.shadow);
+    let is_set = default.is_none_or(|d| (v - d).abs() > (max - min) * 1e-4);
+    let fill = if is_set { c.set_text } else { c.text_tertiary };
+    let hover = ui.anim(id.with("survol"), if ui.hovered(id) || ui.is_active(id) { 1.0 } else { 0.0 }, 120.0);
+    let dragging = ui.is_active(id);
+    let (track, knob, ring) = (c.track, c.knob, c.knob_ring);
     let node = Node::custom(move |p, r| {
         let y = r.center().y;
-        let tr = Rect::from_xywh(r.min.x + 7.0, y - 2.0, r.width() - 14.0, 4.0);
-        p.dl.rect(tr, 2.0, track, None);
+        let tr = Rect::from_xywh(r.min.x + 2.0, y - 1.0, r.width() - 4.0, 2.0);
+        p.dl.rect(tr, 1.0, track, None);
         let x = tr.min.x + tr.width() * t;
-        p.dl.rect(Rect::from_xywh(tr.min.x, tr.min.y, x - tr.min.x, 4.0), 2.0, fill, None);
-        let k = Rect::from_xywh(x - 7.0, y - 7.0, 14.0, 14.0);
-        if hot {
-            p.dl.rect(k.expand(3.0), 10.0, ring.mul_alpha(0.6), None);
+        p.dl.rect(Rect::from_xywh(tr.min.x, y - 2.0, x - tr.min.x, 4.0), 2.0, fill, None);
+        let h = 14.0 + 4.0 * hover;
+        let k = Rect::from_xywh(x - 1.5, y - h * 0.5, 3.0, h);
+        if dragging {
+            p.dl.rect(k.expand(3.0), 4.0, ring, None);
         }
-        p.dl.shadow(k, 7.0, 3.0, vec2(0.0, 1.0), shadow);
-        p.dl.rect(k, 7.0, knob, Some((1.0, fill.mul_alpha(0.0))));
+        p.dl.shadow(k, 1.5, 2.0, vec2(0.0, 1.0), ring.mul_alpha(0.6));
+        p.dl.rect(k, 1.5, knob, Some((1.0, ring)));
     })
     .id(id)
-    .cursor(Cursor::Pointer)
     .size(Size::Px(width), Size::Px(20.0));
     (node, changed)
 }
@@ -178,7 +216,30 @@ pub fn swatch(ui: &mut Ui, id: Id, color: Color, selected: bool, tooltip: &str) 
         p.dl.rect(inner, 9.0 * s, color, Some((1.0, edge)));
     })
     .id(id)
-    .cursor(Cursor::Pointer)
+    .tooltip(tooltip)
+    .size(Size::Px(30.0), Size::Px(30.0));
+    (node, clicked)
+}
+
+/// Pastille « Aucune » : cercle neutre barré (accent désactivé, action principale en contraste inversé).
+pub fn swatch_none(ui: &mut Ui, id: Id, selected: bool, tooltip: &str) -> (Node, bool) {
+    let c = ui.theme.color.clone();
+    let clicked = ui.clicked(id);
+    let (ring, edge, slash) = (c.text, c.border_strong, c.text_secondary);
+    let fill = c.input_bg;
+    let node = Node::custom(move |p, r| {
+        let cr = Rect::from_xywh(r.center().x - 11.0, r.center().y - 11.0, 22.0, 22.0);
+        if selected {
+            p.dl.rect(cr.expand(3.0), 14.0, ring, None);
+            p.dl.rect(cr.expand(1.0), 12.0, fill, None);
+        }
+        let inner = Rect::from_xywh(cr.center().x - 9.0, cr.center().y - 9.0, 18.0, 18.0);
+        p.dl.rect(inner, 9.0, fill, Some((1.0, edge)));
+        let d = 9.0 * std::f32::consts::FRAC_1_SQRT_2;
+        let ctr = inner.center();
+        p.dl.line(vec2(ctr.x - d + 1.0, ctr.y + d - 1.0), vec2(ctr.x + d - 1.0, ctr.y - d + 1.0), 1.5, slash);
+    })
+    .id(id)
     .tooltip(tooltip)
     .size(Size::Px(30.0), Size::Px(30.0));
     (node, clicked)
@@ -270,33 +331,35 @@ pub fn text_input(ui: &mut Ui, cfg: TextInput<'_>, text: &mut String) -> (Node, 
     })
     .width(Size::Fill(1.0))
     .height(Size::Fill(1.0));
-    let border = if focus { c.accent } else { c.border.mix(c.border_strong, hover) };
-    let mut n = Node::row()
+    // Focus : contour 2 px à la couleur de focus, bordure effacée (charte, `.field`).
+    let border = if focus { c.focus_ring } else { c.border_strong.mix(c.text_tertiary, hover) };
+    let n = Node::row()
         .id(id)
         .cursor(Cursor::Text)
         .width(cfg.width)
-        .height(Size::Px(28.0))
+        .height(Size::Px(ui.theme.size.control_height))
         .padding(Edges::xy(8.0, 0.0))
         .gap(6.0)
         .radius(ui.theme.size.radius_control)
         .bg(c.input_bg)
-        .border(1.0, border);
-    if focus {
-        n = n.shadow(0.5, vec2(0.0, 0.0), c.focus_ring).shadow(3.0, vec2(0.0, 0.0), c.focus_ring.mul_alpha(0.5));
-    }
+        .border(if focus { 2.0 } else { 1.0 }, border);
+    let mut n = n;
     if let Some(i) = cfg.icon {
-        n = n.child(Node::icon(i, 14.0, if focus { c.text_secondary } else { c.text_tertiary }));
+        n = n.child(Node::icon(i, ui.theme.size.icon, if focus { c.text_secondary } else { c.text_tertiary }));
     }
     n = n.child(field);
     if empty
         && !focus
         && let Some(h) = cfg.hint
     {
-        n = n.child(Node::stack().padding(Edges::xy(5.0, 1.0)).radius(4.0).border(1.0, c.border).child(Node::text(
-            h,
-            TextStyle::new(10.5, Weight::Medium),
-            c.text_tertiary,
-        )));
+        n = n.child(
+            Node::stack()
+                .height(Size::Px(18.0))
+                .padding(Edges::xy(5.0, 0.0))
+                .radius(4.0)
+                .bg(c.surface_active)
+                .child(Node::text(h, TextStyle::new(ui.theme.size.font_size_label, Weight::Medium), c.text_secondary)),
+        );
     } else if !empty && cfg.clearable {
         let cid = id.with("effacer");
         if ui.clicked(cid) {
@@ -307,53 +370,50 @@ pub fn text_input(ui: &mut Ui, cfg: TextInput<'_>, text: &mut String) -> (Node, 
         n = n.child(
             Node::stack()
                 .id(cid)
-                .cursor(Cursor::Pointer)
                 .tooltip("Effacer")
                 .size(Size::Px(18.0), Size::Px(18.0))
                 .radius(9.0)
-                .child(Node::icon("x", 12.0, cc)),
+                .child(Node::icon("close", 14.0, cc)),
         );
     }
     let cleared = ui.clicked(id.with("effacer"));
     (n, changed || cleared)
 }
 
-/// Fenêtre modale centrée : titre, bouton de fermeture, corps, pied facultatif. Renvoie aussi « fermer ».
+/// Fenêtre modale centrée (`.overlay > .dialog`) : titre, bouton de fermeture, corps, pied facultatif.
+/// Fond `--surface-raised`, rayon 8, ombre de la charte, apparition 200 ms. Renvoie aussi « fermer ».
 pub fn modal(ui: &mut Ui, id: Id, title: &str, size: (f32, f32), body: Node, footer: Vec<Node>) -> (Node, bool) {
     let c = ui.theme.color.clone();
+    let m = ui.theme.size.clone();
     let close_id = id.with("fermer");
     let close = ui.clicked(close_id) || ui.escape_pressed();
-    let appear = ui.anim(id.with("apparition"), 1.0, 160.0);
-    let cc = if ui.hovered(close_id) { c.text } else { c.text_secondary };
-    let close_bg = ui.state_color(close_id, Color::TRANSPARENT, c.raised_hover, c.border_strong);
+    let appear = ui.anim(id.with("apparition"), 1.0, 200.0);
+    let hover = ui.anim(close_id.with("survol"), if ui.hovered(close_id) { 1.0 } else { 0.0 }, 120.0);
     let header = Node::row()
-        .height(Size::Px(48.0))
+        .height(Size::Px(52.0))
         .width(Size::Fill(1.0))
-        .padding(Edges { left: 18.0, right: 10.0, top: 0.0, bottom: 0.0 })
-        .border_bottom(c.divider)
-        .child(Node::text(title, TextStyle::new(14.0, Weight::SemiBold), c.text).width(Size::Fill(1.0)))
+        .padding(Edges { left: 20.0, right: 12.0, top: 0.0, bottom: 0.0 })
+        .child(Node::text(title, TextStyle::new(m.font_size_title, Weight::Medium), c.text).width(Size::Fill(1.0)))
         .child(
             Node::stack()
                 .id(close_id)
-                .cursor(Cursor::Pointer)
                 .tooltip_shortcut("Fermer", "Échap")
-                .size(Size::Px(28.0), Size::Px(28.0))
-                .radius(6.0)
-                .bg(close_bg)
-                .child(Node::icon("x", 16.0, cc)),
+                .size(Size::Px(m.control_height), Size::Px(m.control_height))
+                .radius(m.radius_control)
+                .bg(Color::TRANSPARENT.mix(c.raised_hover, hover))
+                .child(Node::icon("close", m.icon, c.text_secondary.mix(c.text, hover))),
         );
     let mut card = Node::column()
         .anchor(Anchor {
             center_x: true,
-            top: Some(((ui.input.size.y - size.1) * 0.5).round().max(16.0) + (1.0 - appear) * 10.0),
+            top: Some(((ui.input.size.y - size.1) * 0.5).round().max(16.0) + (1.0 - appear) * 8.0),
             ..Default::default()
         })
         .size(Size::Px(size.0), Size::Px(size.1.min(ui.input.size.y - 32.0)))
-        .radius(12.0)
-        .bg(c.panel)
-        .border(1.0, c.border)
-        .shadow(48.0, vec2(0.0, 18.0), c.shadow.mul_alpha(1.2))
-        .shadow(4.0, vec2(0.0, 1.0), c.shadow.mul_alpha(0.6))
+        .radius(m.radius_panel)
+        .bg(c.raised)
+        .border(1.0, c.border_strong)
+        .shadow(40.0, vec2(0.0, 16.0), c.shadow)
         .opacity(appear)
         .clip()
         .child(header)
@@ -361,13 +421,13 @@ pub fn modal(ui: &mut Ui, id: Id, title: &str, size: (f32, f32), body: Node, foo
     if !footer.is_empty() {
         card = card.child(
             Node::row()
-                .height(Size::Px(56.0))
+                .height(Size::Px(60.0))
                 .width(Size::Fill(1.0))
-                .padding(Edges::xy(16.0, 0.0))
+                .padding(Edges::xy(20.0, 0.0))
                 .gap(8.0)
                 .justify(Justify::End)
                 .align(Align::Center)
-                .border_top(c.divider)
+                .border_top(c.border)
                 .children(footer),
         );
     }

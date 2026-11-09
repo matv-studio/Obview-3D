@@ -1,4 +1,4 @@
-//! Icônes vectorielles rendues au pixel exact de l'écran (resvg), mises en cache dans l'atlas.
+//! Icônes vectorielles (grille 16 × 16) rendues au pixel exact de l'écran (resvg), mises en cache dans l'atlas.
 
 use std::collections::HashMap;
 
@@ -42,8 +42,8 @@ impl Icons {
         };
         let s = dl.scale;
         let px = (size * s).round().max(1.0) as u16;
-        // Trait d'environ 1,4 px logique quelle que soit la taille (grille Lucide de 24).
-        let stroke = (1.4 * 24.0 / size).clamp(1.2, 2.2);
+        // Trait de 1,5 px logique quelle que soit la taille (grille de 16, charte des apps).
+        let stroke = (1.5 * 16.0 / size).clamp(1.2, 2.0);
         let key = Key { index, px, stroke_x100: (stroke * 100.0) as u16 };
         let entry =
             *self.cache.entry(key).or_insert_with(|| rasterize(ICONS[index as usize].1, px as u32, stroke, atlas));
@@ -56,7 +56,8 @@ impl Icons {
 }
 
 fn rasterize(svg: &str, px: u32, stroke: f32, atlas: &mut Atlas) -> Option<([f32; 4], u32)> {
-    let svg = svg.replace("currentColor", "#000").replace("stroke-width=\"2\"", &format!("stroke-width=\"{stroke}\""));
+    let svg =
+        svg.replace("currentColor", "#000").replace("stroke-width=\"1.5\"", &format!("stroke-width=\"{stroke}\""));
     let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
     let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
     let k = px as f32 / tree.size().width();

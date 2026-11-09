@@ -588,11 +588,15 @@ impl Node {
             p.dl.pop_clip();
         }
         if let (Some(t), Some(sid)) = (self.thumb, self.scroll) {
+            // Barre de défilement de la charte : trait fin sombre sur toute la hauteur, partie visible en pilule.
             let tid = sid.with("pouce");
             let hot = p.hovered == Some(tid) || p.active == Some(tid);
-            let (w, color) = if hot { (6.0, p.theme.color.thumb_hover) } else { (4.0, p.theme.color.thumb) };
-            let r = Rect::from_xywh(t.max.x - w - 1.0, t.min.y, w, t.height());
-            p.dl.rect(r, w * 0.5, color, None);
+            let cx = t.center().x;
+            let track = Rect::from_xywh(cx - 1.0, r.min.y + 3.0, 2.0, r.height() - 6.0);
+            p.dl.rect(track, 1.0, p.theme.color.track, None);
+            let color = if hot { p.theme.color.thumb_hover } else { p.theme.color.thumb };
+            let pill = Rect::from_xywh(cx - 2.0, t.min.y, 4.0, t.height());
+            p.dl.rect(pill, 2.0, color, None);
         }
     }
 

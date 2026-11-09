@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// Hauteur d'une ligne de l'arbre (liste virtuelle : hauteur fixe).
-pub const TREE_ROW: f32 = 26.0;
+pub const TREE_ROW: f32 = 28.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -36,6 +36,10 @@ pub struct PartInfo {
     pub vertices: usize,
     pub size: [f32; 3],
     pub visible: bool,
+    /// Couleur affichée (matériau du fichier, sinon acier par défaut).
+    pub color: [u8; 4],
+    /// Matériau du fichier (aucun : couleur par défaut de la visionneuse).
+    pub material: Option<String>,
 }
 
 pub struct AppState {
@@ -79,7 +83,15 @@ impl AppState {
         let parts = model
             .parts
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(i, p)| {
+                let material = p
+                    .mesh
+                    .submeshes
+                    .iter()
+                    .find_map(|g| g.material)
+                    .and_then(|m| model.materials.get(m as usize))
+                    .map(|m| if m.name.is_empty() { "Sans nom".to_owned() } else { m.name.clone() });
                 let size =
                     p.mesh.bounds().map(|(lo, hi)| [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]).unwrap_or([0.0; 3]);
                 PartInfo {
@@ -88,6 +100,8 @@ impl AppState {
                     vertices: p.mesh.positions.len(),
                     size,
                     visible: true,
+                    color: model.display_color(i).unwrap_or(crate::frame::STEEL),
+                    material,
                 }
             })
             .collect();
@@ -166,7 +180,7 @@ pub fn spinner(ui: &mut Ui, size: f32, color: Color) -> Node {
     Node::custom(move |p, r| {
         let c = r.center();
         p.dl.set_rotation(c, t * 6.0);
-        p.res.icons.draw(p.dl, p.res.atlas, "loader-circle", r, size, color);
+        p.res.icons.draw(p.dl, p.res.atlas, "spinner", r, size, color);
         p.dl.clear_rotation();
     })
     .size(Size::Px(size), Size::Px(size))
@@ -176,11 +190,11 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let c = ui.theme.color.clone();
     let m = ui.theme.size.clone();
     let theme_id = Id::new("thème");
-    let logo = Node::stack()
-        .size(Size::Px(24.0), Size::Px(24.0))
-        .radius(7.0)
-        .bg(obv_ui::Fill::Vertical(c.accent_hover, c.accent))
-        .child(Node::icon("box", 15.0, Color::WHITE));
+    let logo = Node::stack().size(Size::Px(24.0), Size::Px(24.0)).radius(6.0).bg(c.accent).child(Node::icon(
+        "part",
+        15.0,
+        c.accent_text,
+    ));
     let file = Node::row()
         .id(Id::new("fichier"))
         .tooltip_shortcut("Ouvrir un fichier", "Ctrl O")
@@ -191,7 +205,7 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
         .bg(ui.state_color(Id::new("fichier"), Color::TRANSPARENT, c.raised_hover, c.raised_hover))
         .child(match &s.loading {
             Some(_) => spinner(ui, 15.0, c.accent),
-            None => Node::icon("file-box", 15.0, c.text_secondary),
+            None => Node::icon("file", 15.0, c.text_secondary),
         })
         .child(Node::text(
             s.loading.as_deref().unwrap_or(&s.file_name),
@@ -202,7 +216,7 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let left = Node::row()
         .gap(10.0)
         .child(logo)
-        .child(Node::text("Obview", TextStyle::new(13.5, Weight::SemiBold), c.text))
+        .child(Node::text("Obview", TextStyle::new(m.font_size, Weight::SemiBold), c.text))
         .child(Node::new().size(Size::Px(1.0), Size::Px(18.0)).bg(c.border))
         .child(file);
     let dark = s.theme_kind() == ThemeKind::Dark;
@@ -224,7 +238,7 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
             ui,
             Id::new("convertir"),
             "Convertir",
-            Some("wand-sparkles"),
+            Some("convert"),
             ButtonKind::Primary,
             "Convertir en maillage optimisé (GLB, OBJ, FBX)",
         ));
@@ -233,8 +247,7 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
         .width(Size::Fill(1.0))
         .padding(Edges::xy(12.0, 0.0))
         .justify(Justify::SpaceBetween)
-        .bg(c.panel)
-        .border_bottom(c.border)
+        .bg(c.app_bg)
         .child(left)
         .child(right)
 }
@@ -255,7 +268,7 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
                     id: Id::new("racine"),
                     depth: 0,
                     expanded: Some(s.root_open),
-                    icon: "boxes",
+                    icon: "assembly",
                     label: &s.file_name,
                     detail: Some(&group(filtered.len())),
                     selected: false,
@@ -273,7 +286,7 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
                 id: Id::new("pièce").with(i),
                 depth: 1,
                 expanded: None,
-                icon: "box",
+                icon: "part",
                 label: &p.name,
                 detail: Some(&detail),
                 selected: s.selected == Some(i),
@@ -315,13 +328,13 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         .gap(6.0)
         .child(Node::icon("layers", 13.0, c.text_tertiary))
         .child(Node::text(shown, TextStyle::new(11.5, Weight::Regular), c.text_tertiary));
-    widgets::panel(ui, 268.0).border_right(c.border).child(header).child(list).child(widgets::divider(ui)).child(footer)
+    widgets::panel(ui, 260.0).border_right(c.border).child(header).child(list).child(widgets::divider(ui)).child(footer)
 }
 
 fn properties_panel(ui: &mut Ui, s: &AppState) -> Node {
     let units = s.settings.units;
     let c = ui.theme.color.clone();
-    let mut col = widgets::panel(ui, 288.0).border_left(c.border).padding(Edges::xy(0.0, 6.0));
+    let mut col = widgets::panel(ui, 280.0).border_left(c.border).padding(Edges::xy(0.0, 6.0));
     match s.selected.and_then(|i| s.parts.get(i)) {
         Some(p) => {
             col.push(
@@ -334,14 +347,14 @@ fn properties_panel(ui: &mut Ui, s: &AppState) -> Node {
                             .size(Size::Px(28.0), Size::Px(28.0))
                             .radius(7.0)
                             .bg(c.accent_soft)
-                            .child(Node::icon("box", 15.0, c.accent)),
+                            .child(Node::icon("part", 15.0, c.accent)),
                     )
                     .child(
                         Node::text(&p.name, TextStyle::new(13.5, Weight::SemiBold), c.text)
                             .width(Size::Fill(1.0))
                             .truncate(),
                     )
-                    .child(widgets::small_icon_button(ui, Id::new("cadrer pièce"), "focus", "Cadrer la pièce", c.icon)),
+                    .child(widgets::small_icon_button(ui, Id::new("cadrer pièce"), "frame", "Cadrer la pièce", c.icon)),
             );
             col.push(widgets::divider(ui));
             col.push(widgets::section_header(ui, "Géométrie"));
@@ -353,8 +366,10 @@ fn properties_panel(ui: &mut Ui, s: &AppState) -> Node {
             col.push(Node::new().height(Size::Px(8.0)));
             col.push(widgets::divider(ui));
             col.push(widgets::section_header(ui, "Apparence"));
-            col.push(widgets::color_property(ui, "Couleur", Color::hex(0xc9ccd1), "#C9CCD1"));
-            col.push(widgets::property_row(ui, "Matériau", "Métal satiné"));
+            let [r, g, b, _] = p.color;
+            let hex = format!("#{r:02X}{g:02X}{b:02X}");
+            col.push(widgets::color_property(ui, "Couleur", Color::hex(u32::from_be_bytes([0, r, g, b])), &hex));
+            col.push(widgets::property_row(ui, "Matériau", p.material.as_deref().unwrap_or("Par défaut")));
         }
         None => {
             col.push(widgets::section_header(ui, "Modèle"));
@@ -373,16 +388,23 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
     let items = vec![
         widgets::icon_button(ui, Id::new("panneau gauche"), "panel-left", "Pièces", Some("Ctrl ["), s.left_open),
         widgets::toolbar_separator(ui),
-        tool(ui, Tool::Select, "mouse-pointer-2", "Sélection", "V"),
-        tool(ui, Tool::Measure, "ruler", "Mesurer", "M"),
-        tool(ui, Tool::Section, "scissors", "Coupe", "C"),
-        tool(ui, Tool::Explode, "ungroup", "Vue éclatée", "E"),
+        tool(ui, Tool::Select, "select", "Sélection", "V"),
+        tool(ui, Tool::Measure, "measure", "Mesurer", "M"),
+        tool(ui, Tool::Section, "section", "Coupe", "C"),
+        tool(ui, Tool::Explode, "explode", "Vue éclatée", "E"),
         widgets::toolbar_separator(ui),
-        widgets::icon_button(ui, Id::new("rendu"), "blend", "Vues de rendu", Some("R"), s.inspector != Inspector::Off),
-        widgets::icon_button(ui, Id::new("projection"), "view", "Perspective ou orthographique", Some("P"), false),
-        widgets::icon_button(ui, Id::new("capture"), "camera", "Capture", None, false),
+        widgets::icon_button(ui, Id::new("rendu"), "render", "Vues de rendu", Some("R"), s.inspector != Inspector::Off),
+        widgets::icon_button(
+            ui,
+            Id::new("projection"),
+            "projection",
+            "Perspective ou orthographique",
+            Some("P"),
+            false,
+        ),
+        widgets::icon_button(ui, Id::new("capture"), "capture", "Capture", None, false),
         widgets::toolbar_separator(ui),
-        widgets::icon_button(ui, Id::new("cadrer"), "focus", "Cadrer tout", Some("F"), false),
+        widgets::icon_button(ui, Id::new("cadrer"), "frame", "Cadrer tout", Some("F"), false),
         widgets::toolbar_separator(ui),
         widgets::icon_button(ui, Id::new("panneau droit"), "panel-right", "Propriétés", Some("Ctrl ]"), s.right_open),
     ];
@@ -406,7 +428,7 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
         root.push(
             Node::custom(move |p, r| viewcube::paint(p, r, yaw, pitch, hover, active, &theme))
                 .id(cube_id)
-                .cursor(if hover.is_some() { Cursor::Pointer } else { Cursor::Grab })
+                .cursor(if hover.is_some() { Cursor::Default } else { Cursor::Grab })
                 .tooltip(hover.map(viewcube::name).unwrap_or_else(|| "Orienter la vue".into()))
                 .size(Size::Px(124.0), Size::Px(124.0))
                 .anchor(Anchor { top: Some(12.0), right: Some(12.0), ..Default::default() }),
@@ -416,7 +438,12 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
 }
 
 /// Construit l'interface complète pour l'état courant (les commandes y appliquent leurs changements).
+///
+/// Charte des apps : cadre (`app_bg`) avec la barre du haut, puis un plateau unique aux coins arrondis
+/// (marge 6 px, contour `stage_line`) qui contient les panneaux et la vue 3D.
 pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
+    let m = ui.theme.size.clone();
+    let c = ui.theme.color.clone();
     let body = Node::row()
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
@@ -424,7 +451,18 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
         .children(s.left_open.then(|| parts_panel(ui, s)))
         .child(viewport(ui, s))
         .children(s.right_open.then(|| properties_panel(ui, s)));
-    let root = Node::column().fill().child(topbar(ui, s)).child(body);
+    let (radius, margin) = (m.radius_stage, m.stage_margin);
+    // La vue 3D est dessinée avant l'interface : un anneau couleur du cadre recouvre ce qui dépasse des
+    // coins arrondis, puis le contour du plateau est tracé par-dessus.
+    let frame = Node::custom(move |p, r| {
+        p.dl.rect(r.expand(margin), radius + margin, Color::TRANSPARENT, Some((margin, c.app_bg)));
+        p.dl.rect(r, radius, Color::TRANSPARENT, Some((1.0, c.stage_line)));
+    })
+    .fill();
+    let stage = Node::stack().fill().child(body).child(frame);
+    let root = Node::column().fill().child(topbar(ui, s)).child(
+        Node::stack().fill().padding(Edges { left: margin, right: margin, top: 0.0, bottom: margin }).child(stage),
+    );
     settings_ui::dialog(ui, s);
     convert_ui::dialog(ui, s);
     root
@@ -505,6 +543,12 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
             s.selected = if s.selected == Some(i) { None } else { Some(i) };
         }
     }
+}
+
+/// Teinte des pièces sélectionnées dans la vue 3D : l'accent s'il y en a un, sinon le bleu fonctionnel
+/// « mode actif » de la charte (le contraste inversé ne se lit pas sur une pièce grise).
+pub fn selection_color(theme: &Theme) -> Color {
+    if theme.color.has_accent { theme.color.stage_line } else { theme.color.set_text }
 }
 
 /// Thème correspondant à l'état.

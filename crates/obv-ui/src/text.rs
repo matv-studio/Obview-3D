@@ -11,9 +11,13 @@ use swash::{
 
 use crate::{Atlas, Color, DrawList, Vec2};
 
-static REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
-static MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.ttf");
-static SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
+/// Geist, police variable (SIL OFL 1.1), intégrée : rendu identique sous Windows, macOS et Linux (charte).
+static GEIST: &[u8] = include_bytes!("../assets/fonts/Geist-Variable.ttf");
+
+/// Graisses de la charte : 420, 530, 620.
+const WEIGHTS: [f32; 3] = [420.0, 530.0, 620.0];
+/// Variantes de dessin de la charte (`ss01`, `cv11`).
+const FEATURES: [(&str, u16); 2] = [("ss01", 1), ("cv11", 1)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Weight {
@@ -89,13 +93,12 @@ pub struct Fonts {
 
 const SUBPIXEL: f32 = 4.0;
 
-fn font(i: u8) -> FontRef<'static> {
-    let data = match i {
-        0 => REGULAR,
-        1 => MEDIUM,
-        _ => SEMIBOLD,
-    };
-    FontRef::from_index(data, 0).expect("police Inter intégrée illisible")
+fn font(_i: u8) -> FontRef<'static> {
+    FontRef::from_index(GEIST, 0).expect("police Geist intégrée illisible")
+}
+
+fn wght(i: u8) -> [(&'static str, f32); 1] {
+    [("wght", WEIGHTS[i.min(2) as usize])]
 }
 
 fn font_index(w: Weight) -> u8 {
@@ -145,12 +148,19 @@ impl Fonts {
         let f = font(fi);
         let px = style.size * scale;
         let metrics = f.metrics(&[]).scale(px);
-        let mut shaper = self.shape.builder(f).size(px).build();
+        let mut shaper = self.shape.builder(f).size(px).variations(&wght(fi)).features(&FEATURES).build();
         shaper.add_str(text);
         let mut glyphs = Vec::new();
         let mut x = 0.0f32;
         shaper.shape_with(|cluster| {
             for g in cluster.glyphs {
+                // Geist n'a pas d'espace fine insécable (U+202F, séparateur des milliers) : espace fine
+                // synthétique d'un cinquième de cadratin plutôt que le glyphe manquant.
+                if g.id == 0 && text.get(cluster.source.to_range()).is_some_and(|t| t.chars().all(char::is_whitespace))
+                {
+                    x += px * 0.2;
+                    continue;
+                }
                 glyphs.push(PlacedGlyph { font: fi, id: g.id, x: x + g.x, y: -g.y });
                 x += g.advance;
             }
@@ -185,7 +195,8 @@ impl Fonts {
             return *g;
         }
         let f = font(key.font);
-        let mut scaler = self.scale_ctx.builder(f).size(key.px64 as f32 / 64.0).hint(false).build();
+        let mut scaler =
+            self.scale_ctx.builder(f).size(key.px64 as f32 / 64.0).variations(&wght(key.font)).hint(false).build();
         let image = Render::new(&[Source::Outline])
             .format(Format::Alpha)
             .offset(Vector::new(key.sub as f32 / SUBPIXEL, 0.0))

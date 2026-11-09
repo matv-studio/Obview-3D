@@ -1,13 +1,13 @@
 //! Fenêtre des réglages : rubriques à gauche, réglages groupés en cartes à droite, effet immédiat.
 
 use obv_ui::{
-    ACCENT_PRESETS, Align, Color, Cursor, Edges, Id, Justify, Layer, Node, Size, TextStyle, Ui, Weight,
+    ACCENT_PRESETS, Align, Color, Edges, Id, Justify, Layer, Node, Size, TextStyle, Ui, Weight,
     controls::{self, TextInput},
     widgets::{self, ButtonKind},
 };
 
 use crate::{
-    settings::{NavAction, NavScheme, Settings, ThemeChoice, Units, gesture_keys, gestures},
+    settings::{NavAction, NavScheme, Scope, Settings, ThemeChoice, Units, gesture_keys, gestures},
     shell::AppState,
 };
 
@@ -29,9 +29,9 @@ impl Section {
     }
     fn icon(self) -> &'static str {
         match self {
-            Section::Appearance => "palette",
+            Section::Appearance => "appearance",
             Section::Navigation => "mouse",
-            Section::Display => "monitor",
+            Section::Display => "display",
         }
     }
 }
@@ -139,11 +139,18 @@ fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         s.settings_dirty = true;
     }
     let mut swatches = Node::row().gap(2.0);
+    let (none, clicked) = controls::swatch_none(ui, id("accent aucune"), s.settings.accent.is_none(), "Aucune");
+    if clicked {
+        s.settings.accent = None;
+        s.accent_hex.clear();
+        s.settings_dirty = true;
+    }
+    swatches.push(none);
     for (i, (hex, name)) in ACCENT_PRESETS.iter().enumerate() {
         let (n, clicked) =
-            controls::swatch(ui, id("accent").with(i), Color::hex(*hex), s.settings.accent == *hex, name);
+            controls::swatch(ui, id("accent").with(i), Color::hex(*hex), s.settings.accent == Some(*hex), name);
         if clicked {
-            s.settings.accent = *hex;
+            s.settings.accent = Some(*hex);
             s.accent_hex = format!("{hex:06X}");
             s.settings_dirty = true;
         }
@@ -151,7 +158,7 @@ fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     }
     let hex_id = id("accent hex");
     if !ui.has_focus(hex_id) && !ui.clicked(hex_id) {
-        s.accent_hex = format!("{:06X}", s.settings.accent);
+        s.accent_hex = s.settings.accent.map(|a| format!("{a:06X}")).unwrap_or_default();
     }
     let (input, changed) = controls::text_input(
         ui,
@@ -159,21 +166,40 @@ fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
             id: hex_id,
             placeholder: "RRGGBB",
             width: Size::Px(112.0),
-            icon: Some("pipette"),
+            icon: None,
             hint: None,
             clearable: false,
         },
         &mut s.accent_hex,
     );
     if changed && let Some(col) = Color::parse_hex(&s.accent_hex) {
-        s.settings.accent = col.to_hex();
+        s.settings.accent = Some(col.to_hex());
         s.settings_dirty = true;
     }
-    let dot = Node::new()
-        .size(Size::Px(18.0), Size::Px(18.0))
-        .radius(5.0)
-        .bg(Color::hex(s.settings.accent))
-        .border(1.0, ui.theme.color.border_strong);
+    let c = ui.theme.color.clone();
+    let dot = match s.settings.accent {
+        Some(a) => {
+            Node::new().size(Size::Px(16.0), Size::Px(16.0)).radius(4.0).bg(Color::hex(a)).border(1.0, c.border_strong)
+        }
+        None => Node::new().size(Size::Px(16.0), Size::Px(16.0)).radius(4.0).border(1.0, c.border_strong),
+    };
+    let scope_idx = match s.settings.accent_scope {
+        Scope::Minimal => 0,
+        Scope::Standard => 1,
+        Scope::Extended => 2,
+    };
+    let (scope, picked) = segmented(ui, id("étendue"), &["Minimale", "Standard", "Étendue"], scope_idx, 252.0);
+    if let Some(i) = picked
+        && s.settings.accent.is_some()
+    {
+        s.settings.accent_scope = [Scope::Minimal, Scope::Standard, Scope::Extended][i];
+        s.settings_dirty = true;
+    }
+    let scope = if s.settings.accent.is_some() {
+        scope.id(id("étendue info")).tooltip("Minimale : focus et contour de la vue. Standard : + action principale, interrupteurs, sélection. Étendue : + onglets, choix, lignes actives")
+    } else {
+        scope.opacity(0.45).id(id("étendue info")).tooltip("Choisir d'abord une couleur d'accent")
+    };
     vec![
         section_title(ui, "Interface"),
         card(
@@ -182,6 +208,7 @@ fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
                 setting_row(ui, "Thème", seg),
                 setting_row(ui, "Couleur d'accent", swatches),
                 setting_row(ui, "Couleur personnalisée", Node::row().gap(8.0).child(dot).child(input)),
+                setting_row(ui, "Étendue de l'accent", scope),
             ],
         ),
     ]
@@ -280,7 +307,6 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         nav.push(
             Node::row()
                 .id(sid)
-                .cursor(Cursor::Pointer)
                 .height(Size::Px(32.0))
                 .width(Size::Fill(1.0))
                 .padding(Edges::xy(10.0, 0.0))
@@ -315,7 +341,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         s.settings_dirty = true;
     }
     let footer = vec![
-        widgets::button(ui, reset_id, "Rétablir", Some("rotate-ccw"), ButtonKind::Secondary, "Valeurs par défaut"),
+        widgets::button(ui, reset_id, "Rétablir", Some("reset"), ButtonKind::Secondary, "Valeurs par défaut"),
         Node::spacer(),
         widgets::button(ui, id("terminé"), "Terminé", None, ButtonKind::Primary, "Fermer les réglages"),
     ];

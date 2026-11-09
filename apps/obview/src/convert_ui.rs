@@ -107,8 +107,8 @@ fn stat(ui: &Ui, label: &str, value: String, accent: bool) -> Node {
         .width(Size::Fill(1.0))
         .gap(4.0)
         .padding(Edges::all(12.0))
-        .radius(10.0)
-        .bg(c.raised.mul_alpha(0.6))
+        .radius(8.0)
+        .bg(c.raised)
         .border(1.0, c.border)
         .child(Node::text(label, TextStyle::new(11.5, Weight::Medium), c.text_secondary))
         .child(Node::text(value, TextStyle::new(17.0, Weight::SemiBold), if accent { c.accent } else { c.text }))
@@ -209,6 +209,20 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         "Silhouette",
         sil.tooltip("Arêtes vives et contours plus fidèles, au prix de quelques triangles"),
     ));
+    if s.convert.format == Format::Glb {
+        let (comp, toggled) = controls::toggle(ui, id("compression"), s.convert.compress);
+        if let Some(v) = toggled
+            && !running
+        {
+            s.convert.compress = v;
+            s.convert.status = Status::Idle;
+        }
+        body.push(row(
+            ui,
+            "Compression",
+            comp.tooltip("Quantification et compression meshoptimizer : fichier 2 à 3 fois plus léger"),
+        ));
+    }
     body.push(widgets::divider(ui));
     body.push(Node::new().height(Size::Px(14.0)));
 
@@ -233,9 +247,9 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                     .width(Size::Fill(1.0))
                     .gap(8.0)
                     .padding(Edges::all(12.0))
-                    .radius(10.0)
-                    .bg(c.danger.with_alpha(0.12))
-                    .child(Node::icon("circle-alert", 15.0, c.danger))
+                    .radius(8.0)
+                    .bg(c.danger_bg)
+                    .child(Node::icon("alert", 15.0, c.danger))
                     .child(
                         Node::text(e.clone(), TextStyle::new(12.5, Weight::Medium), c.danger)
                             .width(Size::Fill(1.0))
@@ -294,7 +308,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
             ui,
             id("dossier"),
             "Dossier",
-            Some("folder-open"),
+            Some("open"),
             ButtonKind::Secondary,
             "Montrer le fichier",
         ));
@@ -303,7 +317,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
             ui,
             id("ouvrir"),
             "Ouvrir le résultat",
-            Some("file-box"),
+            Some("file"),
             ButtonKind::Primary,
             "Ouvrir le fichier produit pour le comparer",
         ));
@@ -321,7 +335,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
             ui,
             id("lancer"),
             label,
-            Some("wand-sparkles"),
+            Some("convert"),
             ButtonKind::Primary,
             "Choisir le fichier de sortie et convertir",
         );

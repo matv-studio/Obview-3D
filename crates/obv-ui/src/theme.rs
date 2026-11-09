@@ -1,4 +1,7 @@
-//! Jetons de conception : couleurs, rayons, espacements, typographie. Deux thèmes, mêmes noms.
+//! Jetons de conception, repris de la charte des applications internes (Revel, `tokens.css`, 09/11/2026) :
+//! gris neutres sans teinte, un seul accent choisi par l'utilisateur (« Aucune » par défaut : action principale en
+//! contraste inversé), code couleur fonctionnel discret, grille de 4 px, contrôles de 28 px, texte de 13 px.
+//! Un widget ne connaît que des rôles, jamais une valeur.
 
 use crate::Color;
 
@@ -8,18 +11,33 @@ pub enum ThemeKind {
     Light,
 }
 
-/// Couleurs sémantiques : un widget ne connaît que ces rôles, jamais une valeur.
+/// Étendue de l'accent (charte, principe 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AccentScope {
+    /// Focus et contour du plateau seulement.
+    Minimal,
+    /// + action principale, interrupteurs, sélection.
+    #[default]
+    Standard,
+    /// + onglets, choix, lignes actives, glissières.
+    Extended,
+}
+
+/// Couleurs sémantiques.
 #[derive(Clone, Debug)]
 pub struct Palette {
-    /// Fond de la fenêtre derrière les panneaux.
+    /// Cadre de la fenêtre et barre supérieure (`--chrome`) ; aussi couleur d'effacement.
     pub app_bg: Color,
-    /// Panneaux latéraux et barre du haut.
+    /// Contour du plateau (la vue 3D) : accent, sinon gris (`--stage-line`).
+    pub stage_line: Color,
+    /// Panneaux, barres d'outils (`--surface`).
     pub panel: Color,
-    /// Éléments posés sur un panneau (champ, survol de ligne).
+    /// Sections, champs, menus (`--surface-raised`).
     pub raised: Color,
-    /// Survol d'un élément sur `raised`.
     pub raised_hover: Color,
-    /// Barres et menus flottants au-dessus de la vue 3D.
+    /// Élément actif ou enfoncé (`--surface-active`).
+    pub surface_active: Color,
+    /// Barre flottante au-dessus de la vue 3D.
     pub floating: Color,
     pub border: Color,
     pub border_strong: Color,
@@ -28,58 +46,71 @@ pub struct Palette {
     pub text_secondary: Color,
     pub text_tertiary: Color,
     pub icon: Color,
+    /// Couleur d'accent effective : celle de l'utilisateur, ou le contraste inversé sans accent (`--primary`).
     pub accent: Color,
     pub accent_hover: Color,
+    pub accent_press: Color,
+    /// Texte sur l'accent (`--primary-ink`).
     pub accent_text: Color,
-    /// Segment choisi d'une commande segmentée (onglets).
+    /// Un accent a été choisi (sinon `accent` est le contraste inversé).
+    pub has_accent: bool,
+    /// Segment choisi d'une commande segmentée.
     pub segment_selected: Color,
-    /// Fond d'un élément actif ou sélectionné (accent atténué).
+    /// Fond d'une ligne ou d'un élément sélectionné (`--selection`).
     pub accent_soft: Color,
     pub selection_text: Color,
+    /// Code fonctionnel : bleu « réglé ici / mode actif », orange « hérité / avertissement », rouge, vert.
+    pub set_text: Color,
+    pub set_bg: Color,
     pub danger: Color,
+    pub danger_bg: Color,
     pub success: Color,
     pub warning: Color,
     pub focus_ring: Color,
     pub shadow: Color,
-    /// Dégradé du fond de la vue 3D (haut, bas).
+    /// Dégradé neutre du fond de la vue 3D (haut, bas).
     pub viewport_top: Color,
     pub viewport_bottom: Color,
     pub tooltip_bg: Color,
     pub tooltip_text: Color,
-    /// Axes X, Y, Z (cube de vue, repères).
     pub axis_x: Color,
     pub axis_y: Color,
     pub axis_z: Color,
-    /// Voile posé sous une fenêtre modale.
+    /// Voile sous une fenêtre (`--overlay`).
     pub scrim: Color,
-    /// Rail d'un interrupteur éteint, d'un curseur, d'une barre de défilement.
+    /// Trait fin des glissières, interrupteurs, barres de défilement (`--range-track-bg`).
     pub track: Color,
-    /// Pouce de la barre de défilement.
+    /// Pouce de la barre de défilement (`--text-faint`, survol `--text-muted`).
     pub thumb: Color,
     pub thumb_hover: Color,
-    /// Bouton rond d'un interrupteur ou d'un curseur.
+    /// Poignée des glissières et des interrupteurs.
     pub knob: Color,
-    /// Champ de saisie.
+    pub knob_ring: Color,
+    /// Champ de saisie (`--bg`).
     pub input_bg: Color,
 }
 
-/// Dimensions communes (pixels logiques).
+/// Dimensions (pixels logiques), grille de 4 px.
 #[derive(Clone, Debug)]
 pub struct Metrics {
     pub radius_control: f32,
     pub radius_panel: f32,
     pub radius_floating: f32,
+    pub radius_stage: f32,
     pub control_height: f32,
     pub row_height: f32,
     pub topbar_height: f32,
     pub icon: f32,
     pub font_size: f32,
     pub font_size_small: f32,
+    pub font_size_label: f32,
     pub font_size_title: f32,
     pub space_xs: f32,
     pub space_s: f32,
     pub space_m: f32,
     pub space_l: f32,
+    /// Marge du plateau dans le cadre.
+    pub stage_margin: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -87,153 +118,139 @@ pub struct Theme {
     pub kind: ThemeKind,
     pub color: Palette,
     pub size: Metrics,
+    pub scope: AccentScope,
+}
+
+fn metrics() -> Metrics {
+    Metrics {
+        radius_control: 6.0,
+        radius_panel: 8.0,
+        radius_floating: 10.0,
+        radius_stage: 10.0,
+        control_height: 28.0,
+        row_height: 28.0,
+        topbar_height: 44.0,
+        icon: 16.0,
+        font_size: 13.0,
+        font_size_small: 12.0,
+        font_size_label: 11.0,
+        font_size_title: 15.0,
+        space_xs: 4.0,
+        space_s: 8.0,
+        space_m: 12.0,
+        space_l: 16.0,
+        stage_margin: 6.0,
+    }
 }
 
 impl Theme {
+    /// Thème sans accent, étendue standard.
     pub fn new(kind: ThemeKind) -> Self {
-        match kind {
-            ThemeKind::Dark => Self::dark(),
-            ThemeKind::Light => Self::light(),
-        }
+        Self::build(kind, None, AccentScope::Standard)
     }
-
-    fn metrics() -> Metrics {
-        Metrics {
-            radius_control: 6.0,
-            radius_panel: 10.0,
-            radius_floating: 12.0,
-            control_height: 28.0,
-            row_height: 26.0,
-            topbar_height: 44.0,
-            icon: 16.0,
-            font_size: 13.0,
-            font_size_small: 11.5,
-            font_size_title: 13.0,
-            space_xs: 4.0,
-            space_s: 8.0,
-            space_m: 12.0,
-            space_l: 16.0,
-        }
-    }
-
     pub fn dark() -> Self {
-        let accent = Color::hex(0x4c8dff);
-        Theme {
-            kind: ThemeKind::Dark,
-            color: Palette {
-                app_bg: Color::hex(0x0e0f11),
-                panel: Color::hex(0x17181b),
-                raised: Color::hex(0x1f2024),
-                raised_hover: Color::hex(0x27292e),
-                floating: Color::hexa(0x1c1d21, 0.94),
-                border: Color::hex(0x2a2c31),
-                border_strong: Color::hex(0x3a3d44),
-                divider: Color::hex(0x24262a),
-                text: Color::hex(0xe9eaec),
-                text_secondary: Color::hex(0xa0a4ac),
-                text_tertiary: Color::hex(0x6c717a),
-                icon: Color::hex(0xc4c7cd),
-                accent,
-                accent_hover: Color::hex(0x6aa0ff),
-                accent_text: Color::WHITE,
-                segment_selected: Color::hex(0x31343a),
-                accent_soft: Color::hexa(0x4c8dff, 0.18),
-                selection_text: Color::hex(0xdbe7ff),
-                danger: Color::hex(0xf2645f),
-                success: Color::hex(0x3fb27f),
-                warning: Color::hex(0xe6a23c),
-                focus_ring: Color::hexa(0x4c8dff, 0.55),
-                shadow: Color::hexa(0x000000, 0.45),
-                viewport_top: Color::hex(0x2a2d33),
-                viewport_bottom: Color::hex(0x141518),
-                tooltip_bg: Color::hex(0xf2f3f5),
-                tooltip_text: Color::hex(0x16181c),
-                axis_x: Color::hex(0xf0525a),
-                axis_y: Color::hex(0x6cc644),
-                axis_z: Color::hex(0x4c8dff),
-                scrim: Color::hexa(0x000000, 0.48),
-                track: Color::hex(0x34373d),
-                thumb: Color::hexa(0xffffff, 0.16),
-                thumb_hover: Color::hexa(0xffffff, 0.30),
-                knob: Color::hex(0xf4f5f7),
-                input_bg: Color::hex(0x121316),
-            },
-            size: Self::metrics(),
-        }
+        Self::new(ThemeKind::Dark)
     }
-
     pub fn light() -> Self {
-        let accent = Color::hex(0x2f6fec);
-        Theme {
-            kind: ThemeKind::Light,
-            color: Palette {
-                app_bg: Color::hex(0xe7e9ed),
-                panel: Color::hex(0xfbfbfc),
-                raised: Color::hex(0xf0f1f4),
-                raised_hover: Color::hex(0xe6e8ec),
-                floating: Color::hexa(0xffffff, 0.95),
-                border: Color::hex(0xdfe2e7),
-                border_strong: Color::hex(0xc9cdd4),
-                divider: Color::hex(0xeceef1),
-                text: Color::hex(0x17191d),
-                text_secondary: Color::hex(0x5b616b),
-                text_tertiary: Color::hex(0x8d929b),
-                icon: Color::hex(0x3c414a),
-                accent,
-                accent_hover: Color::hex(0x255fd6),
-                accent_text: Color::WHITE,
-                segment_selected: Color::WHITE,
-                accent_soft: Color::hexa(0x2f6fec, 0.12),
-                selection_text: Color::hex(0x1b4fbf),
-                danger: Color::hex(0xd8403a),
-                success: Color::hex(0x23905f),
-                warning: Color::hex(0xc27c16),
-                focus_ring: Color::hexa(0x2f6fec, 0.45),
-                shadow: Color::hexa(0x1a2233, 0.16),
-                viewport_top: Color::hex(0xf4f5f7),
-                viewport_bottom: Color::hex(0xd8dce2),
-                tooltip_bg: Color::hex(0x1d1f23),
-                tooltip_text: Color::hex(0xf2f3f5),
-                axis_x: Color::hex(0xe0434b),
-                axis_y: Color::hex(0x4fa82e),
-                axis_z: Color::hex(0x2f6fec),
-                scrim: Color::hexa(0x0f1420, 0.28),
-                track: Color::hex(0xd5d8de),
-                thumb: Color::hexa(0x000000, 0.18),
-                thumb_hover: Color::hexa(0x000000, 0.34),
-                knob: Color::WHITE,
-                input_bg: Color::WHITE,
-            },
-            size: Self::metrics(),
-        }
+        Self::new(ThemeKind::Light)
     }
 
-    /// Thème avec une autre couleur d'accent (D-14) : survol, fond atténué, texte sélectionné, anneau de focus et
-    /// texte sur l'accent sont dérivés, avec un contraste vérifié.
-    pub fn with_accent(mut self, accent: Color) -> Self {
-        let c = &mut self.color;
-        let dark = self.kind == ThemeKind::Dark;
-        c.accent = accent.with_alpha(1.0);
-        c.accent_hover = if dark { accent.mix_srgb(Color::WHITE, 0.16) } else { accent.mix_srgb(Color::BLACK, 0.12) }
-            .with_alpha(1.0);
-        c.accent_soft = accent.with_alpha(if dark { 0.20 } else { 0.13 });
-        c.focus_ring = accent.with_alpha(if dark { 0.55 } else { 0.45 });
-        // Texte d'une ligne sélectionnée : teinte de l'accent, contraste d'au moins 4,5 sur le panneau.
-        let mut t = if dark { 0.70 } else { 0.25 };
-        let target = if dark { Color::WHITE } else { Color::BLACK };
-        let mut sel = accent.mix_srgb(target, t);
-        while sel.contrast(c.panel) < 4.5 && t < 1.0 {
-            t += 0.05;
-            sel = accent.mix_srgb(target, t.min(1.0));
+    /// Thème complet : `accent` facultatif (sRGB), étendue de l'accent.
+    pub fn build(kind: ThemeKind, accent: Option<Color>, scope: AccentScope) -> Self {
+        let dark = kind == ThemeKind::Dark;
+        let h = Color::hex;
+        let ha = Color::hexa;
+        // Gris neutres de la charte.
+        let (chrome, surface, raised, hover, active, line, line_strong) = if dark {
+            (h(0x2a2a2a), h(0x1f1f1f), h(0x262626), h(0x2e2e2e), h(0x383838), h(0x2e2e2e), h(0x383838))
+        } else {
+            (h(0xe3e3e3), h(0xffffff), h(0xffffff), h(0xf7f7f7), h(0xe6e6e6), h(0xe6e6e6), h(0xdadada))
+        };
+        let (text, muted, faint) =
+            if dark { (h(0xededed), h(0x9d9d9d), h(0x8a8a8a)) } else { (h(0x1a1a1a), h(0x626262), h(0x767676)) };
+        let (inverse, inverse_ink) = if dark { (h(0xf2f2f2), h(0x191919)) } else { (h(0x1a1a1a), h(0xffffff)) };
+        let bg = if dark { h(0x191919) } else { h(0xefefef) };
+        let stage_base = if dark { h(0x3a3a3a) } else { h(0xcfcfcf) };
+
+        // Accent effectif selon l'étendue.
+        let accent = accent.map(|a| a.with_alpha(1.0));
+        let primary_from_accent = matches!(scope, AccentScope::Standard | AccentScope::Extended);
+        let primary = match accent {
+            Some(a) if primary_from_accent => a,
+            _ => inverse,
+        };
+        let ink_on = |c: Color| if Color::WHITE.contrast(c) >= 3.0 { Color::WHITE } else { h(0x111111) };
+        let primary_ink = if accent.is_some() && primary_from_accent { ink_on(primary) } else { inverse_ink };
+        let primary_hover = primary.mix_srgb(muted, 0.08);
+        let primary_press = primary.mix_srgb(bg, 0.22);
+        let selection_base = match accent {
+            Some(a) if primary_from_accent => a,
+            _ => text,
+        };
+        let selection = selection_base.with_alpha(0.14);
+        let selection_text = match accent {
+            Some(a) if scope == AccentScope::Extended => a.mix_srgb(text, 0.28),
+            _ => text,
+        };
+        let segment = match accent {
+            Some(a) if scope == AccentScope::Extended => a.with_alpha(0.18),
+            _ => active,
+        };
+        Theme {
+            kind,
+            scope,
+            size: metrics(),
+            color: Palette {
+                app_bg: chrome,
+                stage_line: accent.unwrap_or(stage_base),
+                panel: surface,
+                raised,
+                raised_hover: hover,
+                surface_active: active,
+                floating: surface.with_alpha(0.94),
+                border: line,
+                border_strong: line_strong,
+                divider: line,
+                text,
+                text_secondary: muted,
+                text_tertiary: faint,
+                icon: muted,
+                accent: primary,
+                accent_hover: primary_hover,
+                accent_press: primary_press,
+                accent_text: primary_ink,
+                has_accent: accent.is_some(),
+                segment_selected: segment,
+                accent_soft: selection,
+                selection_text,
+                set_text: if dark { h(0x7fb0ff) } else { h(0x1f5fd1) },
+                set_bg: ha(0x4084ff, if dark { 0.2 } else { 0.14 }),
+                danger: if dark { h(0xff9b92) } else { h(0xb3261e) },
+                danger_bg: if dark { h(0x3b2120) } else { h(0xfdeceb) },
+                success: if dark { h(0x7fd6a3) } else { h(0x1b7a4b) },
+                warning: if dark { h(0xf3aa55) } else { h(0xb25b00) },
+                focus_ring: accent.unwrap_or(muted),
+                shadow: ha(0x000000, if dark { 0.45 } else { 0.18 }),
+                viewport_top: if dark { h(0x262626) } else { h(0xf7f7f7) },
+                viewport_bottom: if dark { h(0x151515) } else { h(0xdcdcdc) },
+                tooltip_bg: inverse,
+                tooltip_text: inverse_ink,
+                axis_x: if dark { h(0xef5a5a) } else { h(0xd8433f) },
+                axis_y: if dark { h(0x7cc35a) } else { h(0x4f9a2e) },
+                axis_z: if dark { h(0x5b8fef) } else { h(0x2f6bd8) },
+                scrim: ha(0x000000, if dark { 0.55 } else { 0.28 }),
+                track: if dark { h(0x0c0c0c) } else { h(0xc9c9c9) },
+                thumb: faint,
+                thumb_hover: muted,
+                knob: Color::WHITE,
+                knob_ring: ha(0x000000, if dark { 0.55 } else { 0.28 }),
+                input_bg: bg,
+            },
         }
-        c.selection_text = sel.with_alpha(1.0);
-        // Texte sur l'accent : blanc s'il ressort assez, sinon presque noir.
-        c.accent_text = if Color::WHITE.contrast(accent) >= 3.0 { Color::WHITE } else { Color::hex(0x111216) };
-        self
     }
 }
 
-/// Couleurs d'accent proposées (sRGB), en plus d'une valeur libre.
+/// Couleurs d'accent proposées (sRGB), en plus de « Aucune » et d'une valeur libre.
 pub const ACCENT_PRESETS: [(u32, &str); 8] = [
     (0x4c8dff, "Bleu"),
     (0x7c5cff, "Violet"),

@@ -3,7 +3,7 @@
 //! sur une bande isole ce rendu (étiquette en haut à gauche, un clic dessus revient aux bandes).
 
 use obv_render::{Band, RenderMode};
-use obv_ui::{Anchor, Color, Cursor, Edges, Id, Node, Rect, Size, TextStyle, Ui, Vec2, Weight, vec2};
+use obv_ui::{Anchor, Color, Edges, Id, Node, Rect, Size, TextStyle, Ui, Vec2, Weight, vec2};
 
 use crate::shell::{AppState, group};
 
@@ -96,6 +96,8 @@ pub fn overlay(ui: &mut Ui, s: &AppState) -> Option<Node> {
         let style = TextStyle::new(12.5, Weight::SemiBold);
         let view = s.viewport.get();
         let sp = span(view, s);
+        // Zone du gizmo (en haut à droite) que les noms évitent.
+        let gizmo = if s.settings.view_cube { 150.0 } else { 0.0 };
         layer.push(
             Node::custom(move |p, r| {
                 let n = normal();
@@ -117,7 +119,10 @@ pub fn overlay(ui: &mut Ui, s: &AppState) -> Option<Node> {
                 for (k, m) in RenderMode::ALL.iter().enumerate() {
                     let u = if k == 0 { b[1] - step } else { b[k] };
                     let l = p.res.fonts.layout(label(*m), style, p.dl.scale);
-                    let y_start = r.min.y + 18.0 + l.width * n.x;
+                    let mut y_start = r.min.y + 18.0 + l.width * n.x;
+                    if x_at(u, y_start) + l.height * 2.0 > r.max.x - gizmo {
+                        y_start = r.min.y + gizmo + l.width * n.x;
+                    }
                     let on_line = vec2(x_at(u, y_start), y_start);
                     let pivot = on_line + vec2(n.x, n.y) * (8.0 + l.baseline);
                     p.dl.set_rotation(pivot, angle);
@@ -136,7 +141,6 @@ pub fn overlay(ui: &mut Ui, s: &AppState) -> Option<Node> {
         layer.push(
             Node::row()
                 .id(id)
-                .cursor(Cursor::Pointer)
                 .tooltip_shortcut("Toutes les vues", "Échap")
                 .anchor(Anchor { left: Some(14.0), top: Some(14.0), ..Default::default() })
                 .height(Size::Px(30.0))
@@ -159,10 +163,14 @@ pub fn overlay(ui: &mut Ui, s: &AppState) -> Option<Node> {
     };
     layer.push(
         Node::row()
-            .anchor(Anchor { left: Some(14.0), bottom: Some(14.0), ..Default::default() })
+            .anchor(Anchor { left: Some(12.0), bottom: Some(12.0), ..Default::default() })
+            .height(Size::Px(28.0))
+            .padding(Edges::xy(10.0, 0.0))
+            .radius(6.0)
+            .bg(Color::hex(0x101114).with_alpha(0.55))
             .gap(14.0)
             .child(stat("triangle", group(tris), "triangles"))
-            .child(stat("circle-dot", group(verts), "sommets")),
+            .child(stat("vertex", group(verts), "sommets")),
     );
     Some(layer)
 }

@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use obv_ui::{Color, Key, Modifiers, MouseButton, Theme, ThemeKind};
+use obv_ui::{AccentScope, Color, Key, Modifiers, MouseButton, Theme, ThemeKind};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -222,8 +222,10 @@ impl Units {
 #[serde(default)]
 pub struct Settings {
     pub theme: ThemeChoice,
-    /// Couleur d'accent sRGB `0xRRGGBB` (D-14).
-    pub accent: u32,
+    /// Couleur d'accent sRGB `0xRRGGBB` (D-14) ; aucune par défaut (charte : contraste inversé).
+    pub accent: Option<u32>,
+    /// Étendue de l'accent (charte).
+    pub accent_scope: Scope,
     pub navigation: NavScheme,
     pub invert_zoom: bool,
     pub zoom_to_cursor: bool,
@@ -235,13 +237,21 @@ pub struct Settings {
     pub view_cube: bool,
 }
 
-pub const DEFAULT_ACCENT: u32 = 0x4c8dff;
+/// Étendue de l'accent, enregistrée.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Scope {
+    Minimal,
+    #[default]
+    Standard,
+    Extended,
+}
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             theme: ThemeChoice::Dark,
-            accent: DEFAULT_ACCENT,
+            accent: None,
+            accent_scope: Scope::Standard,
             navigation: NavScheme::Blender,
             invert_zoom: false,
             zoom_to_cursor: true,
@@ -264,10 +274,14 @@ impl Settings {
         }
     }
 
-    /// Thème de l'interface. Le bleu par défaut garde la teinte propre à chaque thème.
+    /// Thème de l'interface (jetons de la charte, accent et étendue choisis).
     pub fn theme(&self, system_dark: bool) -> Theme {
-        let t = Theme::new(self.theme_kind(system_dark));
-        if self.accent == DEFAULT_ACCENT { t } else { t.with_accent(Color::hex(self.accent)) }
+        let scope = match self.accent_scope {
+            Scope::Minimal => AccentScope::Minimal,
+            Scope::Standard => AccentScope::Standard,
+            Scope::Extended => AccentScope::Extended,
+        };
+        Theme::build(self.theme_kind(system_dark), self.accent.map(Color::hex), scope)
     }
 
     pub fn path() -> Option<PathBuf> {
@@ -294,7 +308,7 @@ impl Settings {
     }
 
     fn sanitized(mut self) -> Settings {
-        self.accent &= 0xff_ffff;
+        self.accent = self.accent.map(|a| a & 0xff_ffff);
         if !self.zoom_speed.is_finite() {
             self.zoom_speed = 1.0;
         }
@@ -342,7 +356,7 @@ mod tests {
 
     #[test]
     fn json_aller_retour() {
-        let s = Settings { accent: 0xe0559b, navigation: NavScheme::Maya, ..Default::default() };
+        let s = Settings { accent: Some(0xe0559b), navigation: NavScheme::Maya, ..Default::default() };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&j).unwrap(), s);
         // Champs manquants : valeurs par défaut.

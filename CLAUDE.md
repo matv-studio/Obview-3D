@@ -91,7 +91,10 @@ Dépôt
   target/debug/obview --validation &`, puis `xdotool search --name "Obview 3D"` et `xdotool windowfocus <id>`
   (sans gestionnaire de fenêtres, le clavier n'arrive pas sinon) ; capture : `import -window root fichier.png`.
   `OBV_DEBUG_KEYS=1` affiche les touches reçues.
+- Icônes : `crates/obv-ui/assets/icons/*.svg` (grille 16, `stroke-width="1.5"` remplacé au rendu) ; ajouter le
+  nom dans `crates/obv-ui/src/icon_list.rs`. Geist n'a ni U+202F ni U+2009 (espace synthétique dans `text.rs`).
 - Captures : `cargo test -p obview --test shell` (références dans `apps/obview/tests/reference`,
   `OBV_UPDATE_REFERENCE=1` pour les réécrire) ; fichier local à l'échelle 2 :
   `OBV_SAMPLE_GLB=<fichier.glb> OBV_SELECT=<n> cargo test -p obview --test shell captures_fichier_local -- --ignored`.
   Images dans `target/tmp/rendus/`.
+  Autre taille : `OBV_SIZE=2560x1440 OBV_SCALE=1 OBV_PANELS=1`.

@@ -68,9 +68,9 @@ exception, CGAL et QuadWild GPL, FBX SDK propriétaire) le jour d'une distributi
 ## D-12 · Technique de l'interface maison (09/11/2026)
 Primitives à distance signée dans un seul pipeline instancié (boîtes arrondies à rayons par coin, bordures,
 dégradés, ombres floues calculées par la fonction d'erreur, traits, quadrilatères convexes, couverture de glyphes),
-couleurs en espace linéaire prémultipliées, cible sRGB. Texte : police Inter 4.1 (OFL) en trois graisses, mise en
+couleurs en espace linéaire prémultipliées, cible sRGB. Texte : police Geist variable (OFL ; Inter 4.1 jusqu’à D-24) en trois graisses, mise en
 forme et rendu par swash, position sous-pixel au quart de pixel, couverture ajustée selon la clarté du texte.
-Icônes : Lucide (ISC), rendues par resvg au pixel exact de l'écran. Mise en page : arbre reconstruit à chaque
+Icônes : dessinées pour l'app (grille 16, trait 1,5 ; D-24), rendues par resvg au pixel exact de l'écran. Mise en page : arbre reconstruit à chaque
 image (boîtes flexibles, superpositions ancrées, découpe), survol et clics calculés sur la mise en page de l'image
 précédente. Pourquoi : netteté à toute échelle, un seul tracé pour toute l'interface, aucune dépendance
 d'interface tierce (D-04).
@@ -206,3 +206,27 @@ survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser
 - Visionneuse : couleur de base du premier matériau de chaque pièce. En suspens : affichage des textures dans
   la vue, compression des images (KTX2 / Basis), matériaux par plage dans la vue.
 
+
+## D-24 · Passe d'interface sur la charte des apps (DA Revel) (09/11/2026)
+- Charte `charte-design-apps.md` (projet « Apps interne ») appliquée : gris neutres sans teinte, accent unique
+  au choix, « Aucune » par défaut (l'action principale passe alors en contraste inversé), étendue de l'accent
+  Minimale / Standard / Étendue ; code fonctionnel (bleu : réglé ici / mode actif ; orange : hérité ; rouge :
+  erreur ; vert : succès). Police Geist variable (420 / 530 / 620, `ss01`, `cv11`), texte 13 px, commandes
+  28 px, grille de 4 px. Pas de main au survol des boutons.
+- Structure : cadre `app_bg` avec barre de 44 px (logo, document, actions ; une seule action principale :
+  Convertir), puis un plateau unique (marge 6 px, contour 1 px `stage_line`, rayon 10 px) qui contient la vue
+  3D et les panneaux. La vue 3D étant dessinée avant l'interface, un anneau couleur du cadre (bordure de 6 px
+  à rayon 16 px autour du plateau) recouvre les coins, puis le contour est tracé. Panneaux plats dans le
+  plateau (260 et 280 px), séparés par un trait.
+- Icônes : jeu dessiné pour l'app (35 icônes, `viewBox 0 0 16 16`, trait 1,5, extrémités et angles ronds,
+  `currentColor`), noms par fonction (`render`, `section`, `frame`…) ; Lucide retiré. Trait rendu à 1,5 px
+  logique quelle que soit la taille.
+- Composants refaits selon la charte : interrupteur 26 × 16, glissière 2 / 4 px à poignée 3 × 14 (bleue quand
+  réglée ici, Alt+clic : valeur par défaut), segments, liste de choix (menu 220–320 px), champ 28 px à contour de
+  focus 2 px, barre de défilement fine, fenêtre `surface-raised` rayon 8.
+- Propriétés : couleur et matériau réels de la pièce (au lieu de valeurs d'exemple). Conversion : interrupteur
+  Compression (GLB) ajouté. Inspecteur : noms des bandes déplacés sous le gizmo quand ils le recouvriraient,
+  statistiques sur une pastille sombre (lisibles par-dessus les traits).
+- Geist n'a pas d'espace fine insécable (séparateur des milliers) : espace synthétique de 0,2 cadratin.
+- En suspens : onglets de vue de la charte (une seule vue aujourd'hui), barre d'activité de 2 px en haut de la
+  fenêtre pendant les lectures et conversions, panneaux ancrables et redimensionnables.

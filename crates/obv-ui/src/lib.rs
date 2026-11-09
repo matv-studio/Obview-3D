@@ -2,7 +2,7 @@
 //!
 //! - `geom`, `color`, `theme` : géométrie, couleurs linéaires, jetons de conception clair et sombre.
 //! - `paint` : liste de primitives à distance signée (boîtes arrondies, ombres, traits, glyphes).
-//! - `text`, `icons`, `atlas` : texte Inter et icônes Lucide rendus au pixel de l'écran.
+//! - `text`, `icons`, `atlas` : texte Geist et icônes maison rendus au pixel de l'écran.
 //! - `layout` : arbre de nœuds, boîtes flexibles, superpositions, découpe.
 //! - `input` : entrées d'une image (souris, clavier, texte).
 //! - `ui` : survol, clics, glisser, défilement, focus et saisie, calques, info-bulles, animations.
@@ -33,5 +33,5 @@ pub use layout::{Align, Anchor, Content, Dir, Justify, Node, Size, Tooltip};
 pub use paint::{Corners, DrawList, Fill, Prim};
 pub use text::{Fonts, TextLayout, TextStyle, Weight};
 pub use theme::ACCENT_PRESETS;
-pub use theme::{Metrics, Palette, Theme, ThemeKind};
+pub use theme::{AccentScope, Metrics, Palette, Theme, ThemeKind};
 pub use ui::{Cursor, EditState, Hit, Id, IdPart, Layer, Painter, Resources, ScrollState, Ui};

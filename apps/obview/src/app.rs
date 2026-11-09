@@ -410,7 +410,7 @@ impl App {
         let Some(gfx) = &mut self.gfx else { return };
 
         // Géométrie : envoyée seulement quand la sélection, la visibilité ou l'accent changent.
-        let accent = to_srgb8(self.ui.theme.color.accent);
+        let accent = to_srgb8(shell::selection_color(&self.ui.theme));
         if self.state.inspector != Inspector::Off && self.edges.is_none() {
             self.edges = Some(EdgeCache::compute(&self.model));
         }
