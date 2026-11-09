@@ -86,6 +86,8 @@ pub struct App {
     click_origin: Option<Vec2>,
     last_save: f64,
     error: Option<String>,
+    /// Le cube de vue a été glissé depuis l'appui : le relâchement n'est pas un clic.
+    cube_dragged: bool,
 }
 
 fn load(path: &std::path::Path) -> Result<Model, String> {
@@ -115,6 +117,7 @@ impl App {
             click_origin: None,
             last_save: 0.0,
             error: None,
+            cube_dragged: false,
         };
         if let Some(p) = path {
             app.open(p);
@@ -350,6 +353,32 @@ impl App {
             || (!self.ui.text_focused() && input.keys.contains(&Key::Char('f')) && !input.modifiers.ctrl)
         {
             frame_all(&mut self.nav, &self.state.camera, &self.model, view, now);
+        }
+        // Cube de vue : clic sur une face, une arête ou un coin ; glisser pour tourner.
+        let cube = Id::new("cube de vue");
+        if let Some(r) = self.ui.rect_of(cube) {
+            let cam = self.state.camera;
+            if self.ui.clicked(cube)
+                && let Some(p) = input.pointer
+                && !std::mem::take(&mut self.cube_dragged)
+                && let Some(dir) = crate::viewcube::pick(r, cam.yaw as f32, cam.pitch as f32, p)
+            {
+                let (yaw, pitch) = crate::viewcube::angles(dir, cam.yaw);
+                self.nav.animate_to(&cam, Camera { yaw, pitch, ..cam }, now);
+            } else if self.ui.clicked(cube) {
+                self.cube_dragged = false;
+            } else if self.ui.dragging(cube).is_some() && !self.ui.press_started(cube) {
+                let d = self.ui.pointer_delta();
+                if d != Vec2::default() {
+                    crate::navigation::orbit(
+                        &mut self.state.camera,
+                        cam.target,
+                        -d.x as f64 * 0.0075,
+                        d.y as f64 * 0.0075,
+                    );
+                    self.cube_dragged = true;
+                }
+            }
         }
         if self.ui.clicked(Id::new("cadrer pièce"))
             && let Some(i) = self.state.selected

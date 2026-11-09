@@ -381,6 +381,11 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
     let rect_cell = s.viewport.clone();
     let (yaw, pitch) = (s.camera.yaw as f32, s.camera.pitch as f32);
     let theme = ui.theme.clone();
+    let cube_id = Id::new("cube de vue");
+    let hover = match (ui.hovered(cube_id), ui.rect_of(cube_id), ui.input.pointer) {
+        (true, Some(r), Some(p)) => viewcube::pick(r, yaw, pitch, p),
+        _ => None,
+    };
     let mut root = Node::stack().fill().child(Node::custom(move |_, r| rect_cell.set(r)).fill());
     if let Some(layer) = inspector::overlay(ui, s) {
         root.push(layer);
@@ -388,10 +393,9 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
     root.push(toolbar);
     if s.settings.view_cube {
         root.push(
-            Node::custom(move |p, r| viewcube::paint(p, r, yaw, pitch, &theme))
-                .id(Id::new("cube de vue"))
-                .cursor(Cursor::Pointer)
-                .tooltip("Orienter la vue")
+            Node::custom(move |p, r| viewcube::paint(p, r, yaw, pitch, hover, &theme))
+                .id(cube_id)
+                .cursor(if hover.is_some() { Cursor::Pointer } else { Cursor::Default })
                 .size(Size::Px(104.0), Size::Px(104.0))
                 .anchor(Anchor { top: Some(12.0), right: Some(12.0), ..Default::default() }),
         );

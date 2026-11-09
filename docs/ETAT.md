@@ -35,11 +35,13 @@ Mis à jour : 09/11/2026.
 - Moteur de conversion `obv-mesh` (D-20) : écart garanti mesuré, GLB / OBJ / FBX ; fenêtre « Convertir »
   (format, précision, écart en mm, progression, bilan, ouverture du résultat) ; en ligne de commande :
   `obview --convertir <entrée> <sortie> --ecart <mm>`.
+- Cube de vue : 26 directions (faces, arêtes, coins) au clic avec transition, survol en couleur d'accent,
+  glisser pour tourner.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
-2. Cube de vue cliquable (faces, arêtes, coins) ; fichiers récents.
+2. Fichiers récents ; menu contextuel de la vue (isoler, masquer, cadrer).
 3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie.
 4. Conversion : UV et matériaux, compression meshopt du GLB, simplification adaptée aux surfaces courbes.
 5. Grappes et niveaux de détail ; tri GPU ; mesh shaders.

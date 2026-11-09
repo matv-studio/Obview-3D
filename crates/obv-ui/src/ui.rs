@@ -297,7 +297,8 @@ impl Ui {
             _ => Vec2::default(),
         };
         for (id, s) in self.scrolls.iter_mut() {
-            if self.active == Some(id.with("pouce")) && s.view > 0.0 {
+            // Pas sur l'image de l'appui : le pointeur peut y avoir sauté depuis l'image précédente.
+            if self.active == Some(id.with("pouce")) && !pressed && s.view > 0.0 {
                 s.target = (s.target + delta.y * s.content / s.view).clamp(0.0, s.max());
                 s.offset = s.target;
             }
