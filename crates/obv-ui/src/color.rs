@@ -53,4 +53,60 @@ impl Color {
     pub fn luminance(self) -> f32 {
         0.2126 * self.r + 0.7152 * self.g + 0.0722 * self.b
     }
+
+    /// Rapport de contraste WCAG 2 entre deux couleurs opaques (1 à 21).
+    pub fn contrast(self, o: Color) -> f32 {
+        let (a, b) = (self.luminance(), o.luminance());
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Valeur sRGB `0xRRGGBB` (alpha ignoré).
+    pub fn to_hex(self) -> u32 {
+        let c = |v: f32| {
+            let v = v.clamp(0.0, 1.0);
+            let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+            (s * 255.0).round() as u32
+        };
+        (c(self.r) << 16) | (c(self.g) << 8) | c(self.b)
+    }
+
+    /// Lit `#RRGGBB`, `RRGGBB` ou `#RGB`.
+    pub fn parse_hex(s: &str) -> Option<Color> {
+        let s = s.trim().trim_start_matches('#');
+        let v = match s.len() {
+            6 => u32::from_str_radix(s, 16).ok()?,
+            3 => {
+                let v = u32::from_str_radix(s, 16).ok()?;
+                let (r, g, b) = ((v >> 8) & 0xf, (v >> 4) & 0xf, v & 0xf);
+                ((r * 17) << 16) | ((g * 17) << 8) | (b * 17)
+            }
+            _ => return None,
+        };
+        Some(Color::hex(v))
+    }
+
+    /// Mélange perceptif (en sRGB), pour dériver des teintes comme le ferait un outil de conception.
+    pub fn mix_srgb(self, o: Color, t: f32) -> Color {
+        let split = |c: Color| {
+            let h = c.to_hex();
+            [(h >> 16) as f32, ((h >> 8) & 0xff) as f32, (h & 0xff) as f32]
+        };
+        let (a, b) = (split(self), split(o));
+        let m = |i: usize| (a[i] + (b[i] - a[i]) * t).round().clamp(0.0, 255.0) as u32;
+        Color::hex((m(0) << 16) | (m(1) << 8) | m(2)).with_alpha(self.a + (o.a - self.a) * t)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_aller_retour() {
+        for v in [0x000000, 0xffffff, 0x4c8dff, 0x2f6fec, 0x123456] {
+            assert_eq!(Color::hex(v).to_hex(), v);
+        }
+        assert_eq!(Color::parse_hex("#fa0").map(|c| c.to_hex()), Some(0xffaa00));
+        assert!(Color::parse_hex("zz").is_none());
+    }
 }

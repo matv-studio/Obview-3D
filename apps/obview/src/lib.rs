@@ -2,5 +2,7 @@
 
 pub mod demo;
 pub mod frame;
+pub mod settings;
+pub mod settings_ui;
 pub mod shell;
 pub mod viewcube;

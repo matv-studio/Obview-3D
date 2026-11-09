@@ -2,9 +2,12 @@
 
 use crate::{
     Color, Corners, DrawList, Edges, Fill, Id, Rect, TextStyle, Vec2,
-    ui::{Painter, Resources},
+    ui::{Cursor, Hit, Painter, Resources},
     vec2,
 };
+
+/// Largeur réservée à droite d'une zone défilante quand son contenu déborde.
+pub const SCROLLBAR_GUTTER: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Size {
@@ -76,6 +79,7 @@ pub struct Style {
     pub border: Option<(f32, Color)>,
     /// Bordure d'un seul côté, dessinée comme un trait (séparateurs de panneaux).
     pub border_bottom: Option<Color>,
+    pub border_top: Option<Color>,
     pub border_right: Option<Color>,
     pub border_left: Option<Color>,
     pub radius: Corners,
@@ -99,6 +103,7 @@ impl Default for Style {
             bg: None,
             border: None,
             border_bottom: None,
+            border_top: None,
             border_right: None,
             border_left: None,
             radius: Corners::default(),
@@ -137,6 +142,12 @@ pub struct Node {
     pub rect: Rect,
     /// Surface sensible plutôt qu'un élément purement décoratif (reçoit le survol même sans identifiant explicite).
     pub interactive: bool,
+    /// Forme du pointeur au survol.
+    pub cursor: Cursor,
+    /// Zone défilante verticale : identifiant de son état.
+    pub scroll: Option<Id>,
+    /// Pouce de la barre de défilement (calculé à la mise en page).
+    thumb: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -155,7 +166,16 @@ impl Node {
             children: Vec::new(),
             rect: Rect::ZERO,
             interactive: false,
+            cursor: Cursor::Default,
+            scroll: None,
+            thumb: None,
         }
+    }
+    /// Colonne défilante verticalement, découpée, avec une barre de défilement maison.
+    pub fn scroll(id: Id) -> Self {
+        let mut n = Self::column().clip();
+        n.scroll = Some(id);
+        n
     }
     pub fn row() -> Self {
         Self::new().dir(Dir::Row)
@@ -196,6 +216,10 @@ impl Node {
     }
     pub fn tooltip_shortcut(mut self, text: impl Into<String>, shortcut: impl Into<String>) -> Self {
         self.tooltip = Some(Tooltip { text: text.into(), shortcut: Some(shortcut.into()) });
+        self
+    }
+    pub fn cursor(mut self, c: Cursor) -> Self {
+        self.cursor = c;
         self
     }
     pub fn dir(mut self, d: Dir) -> Self {
@@ -252,6 +276,10 @@ impl Node {
     }
     pub fn border_bottom(mut self, c: Color) -> Self {
         self.style.border_bottom = Some(c);
+        self
+    }
+    pub fn border_top(mut self, c: Color) -> Self {
+        self.style.border_top = Some(c);
         self
     }
     pub fn border_right(mut self, c: Color) -> Self {
@@ -354,7 +382,33 @@ impl Node {
 
     pub fn layout(&mut self, rect: Rect, res: &mut Resources<'_>) {
         self.rect = rect;
-        let inner = rect.shrink(self.style.padding);
+        self.thumb = None;
+        let mut inner = rect.shrink(self.style.padding);
+        if let Some(sid) = self.scroll {
+            let content = self.measure(res).y;
+            let view = rect.height();
+            let st = res.scrolls.entry(sid).or_default();
+            st.content = content;
+            st.view = view;
+            let max = st.max();
+            st.target = st.target.clamp(0.0, max);
+            st.offset = st.offset.clamp(0.0, max);
+            let off = st.offset.round();
+            // Gouttière toujours réservée : la mise en page ne saute pas quand le contenu commence à déborder.
+            inner.max.x -= SCROLLBAR_GUTTER;
+            if max > 0.0 {
+                let track = Rect::from_xywh(rect.max.x - 8.0, rect.min.y + 3.0, 6.0, view - 6.0);
+                let h = (track.height() * view / content).max(28.0).min(track.height());
+                let y = track.min.y + (track.height() - h) * (st.offset / max);
+                self.thumb = Some(Rect::from_xywh(track.min.x, y, track.width(), h));
+            }
+            inner = Rect::from_xywh(
+                inner.min.x,
+                inner.min.y - off,
+                inner.width(),
+                (content - self.style.padding.vertical()).max(inner.height()),
+            );
+        }
         let dir = self.style.dir;
         let measured: Vec<Vec2> = self.children.iter().map(|c| c.measure_outer(res)).collect();
 
@@ -498,6 +552,9 @@ impl Node {
         if let Some(c) = s.border_bottom {
             p.dl.rect(Rect::from_xywh(r.min.x, r.max.y - px, r.width(), px), 0.0, fade(c), None);
         }
+        if let Some(c) = s.border_top {
+            p.dl.rect(Rect::from_xywh(r.min.x, r.min.y, r.width(), px), 0.0, fade(c), None);
+        }
         if let Some(c) = s.border_right {
             p.dl.rect(Rect::from_xywh(r.max.x - px, r.min.y, px, r.height()), 0.0, fade(c), None);
         }
@@ -530,19 +587,52 @@ impl Node {
         if s.clip {
             p.dl.pop_clip();
         }
+        if let (Some(t), Some(sid)) = (self.thumb, self.scroll) {
+            let tid = sid.with("pouce");
+            let hot = p.hovered == Some(tid) || p.active == Some(tid);
+            let (w, color) = if hot { (6.0, p.theme.color.thumb_hover) } else { (4.0, p.theme.color.thumb) };
+            let r = Rect::from_xywh(t.max.x - w - 1.0, t.min.y, w, t.height());
+            p.dl.rect(r, w * 0.5, color, None);
+        }
     }
 
     /// Zones sensibles dans l'ordre de dessin (la dernière est au-dessus), avec la découpe appliquée.
-    pub fn collect_hits(&self, clip: Rect, out: &mut Vec<(Id, Rect, Option<Tooltip>)>) {
+    pub fn collect_hits(&self, clip: Rect, layer: u8, out: &mut Vec<Hit>) {
         let visible = self.rect.intersect(&clip);
+        if self.style.clip && visible.is_empty() {
+            return;
+        }
         if let Some(id) = self.id
             && !visible.is_empty()
         {
-            out.push((id, visible, self.tooltip.clone()));
+            out.push(Hit {
+                id,
+                rect: visible,
+                tooltip: self.tooltip.clone(),
+                cursor: self.cursor,
+                layer,
+                scroll: false,
+            });
+        }
+        if let Some(sid) = self.scroll
+            && !visible.is_empty()
+        {
+            out.push(Hit { id: sid, rect: visible, tooltip: None, cursor: Cursor::Default, layer, scroll: true });
         }
         let child_clip = if self.style.clip { visible } else { clip };
         for c in &self.children {
-            c.collect_hits(child_clip, out);
+            c.collect_hits(child_clip, layer, out);
+        }
+        if let (Some(t), Some(sid)) = (self.thumb, self.scroll) {
+            let r = t.expand(2.0).intersect(&clip);
+            out.push(Hit {
+                id: sid.with("pouce"),
+                rect: r,
+                tooltip: None,
+                cursor: Cursor::Default,
+                layer,
+                scroll: false,
+            });
         }
     }
 }

@@ -50,6 +50,17 @@ pub struct Palette {
     pub axis_x: Color,
     pub axis_y: Color,
     pub axis_z: Color,
+    /// Voile posé sous une fenêtre modale.
+    pub scrim: Color,
+    /// Rail d'un interrupteur éteint, d'un curseur, d'une barre de défilement.
+    pub track: Color,
+    /// Pouce de la barre de défilement.
+    pub thumb: Color,
+    pub thumb_hover: Color,
+    /// Bouton rond d'un interrupteur ou d'un curseur.
+    pub knob: Color,
+    /// Champ de saisie.
+    pub input_bg: Color,
 }
 
 /// Dimensions communes (pixels logiques).
@@ -140,6 +151,12 @@ impl Theme {
                 axis_x: Color::hex(0xf0525a),
                 axis_y: Color::hex(0x6cc644),
                 axis_z: Color::hex(0x4c8dff),
+                scrim: Color::hexa(0x000000, 0.48),
+                track: Color::hex(0x34373d),
+                thumb: Color::hexa(0xffffff, 0.16),
+                thumb_hover: Color::hexa(0xffffff, 0.30),
+                knob: Color::hex(0xf4f5f7),
+                input_bg: Color::hex(0x121316),
             },
             size: Self::metrics(),
         }
@@ -180,8 +197,50 @@ impl Theme {
                 axis_x: Color::hex(0xe0434b),
                 axis_y: Color::hex(0x4fa82e),
                 axis_z: Color::hex(0x2f6fec),
+                scrim: Color::hexa(0x0f1420, 0.28),
+                track: Color::hex(0xd5d8de),
+                thumb: Color::hexa(0x000000, 0.18),
+                thumb_hover: Color::hexa(0x000000, 0.34),
+                knob: Color::WHITE,
+                input_bg: Color::WHITE,
             },
             size: Self::metrics(),
         }
     }
+
+    /// Thème avec une autre couleur d'accent (D-14) : survol, fond atténué, texte sélectionné, anneau de focus et
+    /// texte sur l'accent sont dérivés, avec un contraste vérifié.
+    pub fn with_accent(mut self, accent: Color) -> Self {
+        let c = &mut self.color;
+        let dark = self.kind == ThemeKind::Dark;
+        c.accent = accent.with_alpha(1.0);
+        c.accent_hover = if dark { accent.mix_srgb(Color::WHITE, 0.16) } else { accent.mix_srgb(Color::BLACK, 0.12) }
+            .with_alpha(1.0);
+        c.accent_soft = accent.with_alpha(if dark { 0.20 } else { 0.13 });
+        c.focus_ring = accent.with_alpha(if dark { 0.55 } else { 0.45 });
+        // Texte d'une ligne sélectionnée : teinte de l'accent, contraste d'au moins 4,5 sur le panneau.
+        let mut t = if dark { 0.70 } else { 0.25 };
+        let target = if dark { Color::WHITE } else { Color::BLACK };
+        let mut sel = accent.mix_srgb(target, t);
+        while sel.contrast(c.panel) < 4.5 && t < 1.0 {
+            t += 0.05;
+            sel = accent.mix_srgb(target, t.min(1.0));
+        }
+        c.selection_text = sel.with_alpha(1.0);
+        // Texte sur l'accent : blanc s'il ressort assez, sinon presque noir.
+        c.accent_text = if Color::WHITE.contrast(accent) >= 3.0 { Color::WHITE } else { Color::hex(0x111216) };
+        self
+    }
 }
+
+/// Couleurs d'accent proposées (sRGB), en plus d'une valeur libre.
+pub const ACCENT_PRESETS: [(u32, &str); 8] = [
+    (0x4c8dff, "Bleu"),
+    (0x7c5cff, "Violet"),
+    (0xe0559b, "Rose"),
+    (0xf0524f, "Rouge"),
+    (0xf28c28, "Orange"),
+    (0xe3b416, "Jaune"),
+    (0x2fb67c, "Vert"),
+    (0x1eb2c4, "Cyan"),
+];

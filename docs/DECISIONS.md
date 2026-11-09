@@ -74,3 +74,31 @@ Icônes : Lucide (ISC), rendues par resvg au pixel exact de l'écran. Mise en pa
 image (boîtes flexibles, superpositions ancrées, découpe), survol et clics calculés sur la mise en page de l'image
 précédente. Pourquoi : netteté à toute échelle, un seul tracé pour toute l'interface, aucune dépendance
 d'interface tierce (D-04).
+
+## D-13 · Schémas de navigation 3D (09/11/2026)
+Demande de l'utilisateur. Réglages › Navigation propose les gestes des logiciels courants, **Blender par défaut** :
+- Blender : orbite bouton du milieu, panoramique Maj + milieu, zoom Ctrl + milieu ou molette.
+- Maya : Alt + gauche orbite, Alt + milieu panoramique, Alt + droit zoom.
+- Cinema 4D : comme Maya, plus les touches 1, 2, 3 maintenues (déplacer, zoomer, tourner) avec le bouton gauche.
+- 3ds Max : milieu panoramique, Alt + milieu orbite, Ctrl + Alt + milieu zoom.
+- SolidWorks : milieu orbite, Ctrl + milieu panoramique, Maj + milieu zoom.
+- Fusion 360 : milieu panoramique, Maj + milieu orbite, molette zoom.
+- Rhino : droit orbite, Maj + droit panoramique, Ctrl + droit zoom.
+Sources : documentation Blender, Autodesk (Maya, 3ds Max, Fusion), Maxon, Dassault (via Autodesk),
+McNeel. Communs à tous : molette pour zoomer vers le curseur, bouton gauche pour sélectionner, inversion du zoom
+réglable, orbite autour du point visé.
+
+## D-14 · Couleur d'accent (09/11/2026)
+Demande de l'utilisateur. Une couleur choisie (nuancier ou valeur hexadécimale) ; survol, fond atténué, texte
+de sélection et anneau de focus en sont dérivés pour chaque thème, contraste du texte sur l'accent vérifié.
+
+## D-15 · Vues de rendu à la manière de Marmoset Viewer (09/11/2026)
+Demande de l'utilisateur, d'après la visionneuse web `.mview` (relevé sur ArtStation le 09/11/2026) : un bouton
+partage la vue en bandes diagonales parallèles, une par rendu, séparées par de fins traits clairs, avec le nom
+de chaque rendu écrit le long de son trait en haut ; fond gris uni ; un clic sur une bande montre ce rendu seul
+avec une étiquette en haut à gauche, un clic sur l'étiquette revient aux bandes. Rendus d'Obview : Éclairé,
+Couleur, Normales, Topologie, Rayons X, Arêtes. Nombre de triangles et de sommets en bas à gauche.
+
+## D-16 · Écran de référence 16:9 (09/11/2026)
+Demande de l'utilisateur : l'interface est réglée d'abord pour le 16:9 ; captures de référence en 1920 × 1080,
+contrôle en 2560 × 1440 (échelle 1,25 à 1,5).

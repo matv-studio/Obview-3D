@@ -35,6 +35,12 @@ Produit (consignes du 02/11 et du 09/11/2026)
   restent deux outils distincts.
 - Chaque écran vérifié visuellement **dans les deux thèmes**, captures envoyées.
 - Quand une limite bloque l'utilisateur, créer l'outil qui la lève.
+- Écran de référence : **16:9** (captures en 1920 × 1080, vérification en 2560 × 1440).
+- Navigation 3D : schémas des logiciels courants au choix, **Blender par défaut** (D-13). Couleur d'accent au
+  choix (D-14). Vues de rendu présentées comme la visionneuse web Marmoset (D-15).
+- Le format `.mview` n'est pas pris en charge (décision du 09/11/2026).
+- **Ne pas mettre à jour la note de passation** (PC, documents du projet claude.ai) sauf demande de
+  l'utilisateur. La mémoire du dépôt (ce fichier, `docs/`) reste tenue à jour.
 
 Dépôt
 - Auteur des commits : `Claude <noreply@anthropic.com>` (demande de l'utilisateur du 09/11/2026 : « écrit sous ton

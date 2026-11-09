@@ -8,9 +8,11 @@ use obv_ui::{FrameInput, Id, ThemeKind, Ui, vec2};
 use obview::{
     demo,
     frame::OffscreenFrame,
+    settings::ThemeChoice,
     shell::{self, AppState},
 };
 
+#[derive(Clone, Copy)]
 struct Shot<'a> {
     name: &'a str,
     theme: ThemeKind,
@@ -19,6 +21,26 @@ struct Shot<'a> {
     tooltip: Option<Id>,
     size: (u32, u32),
     scale: f32,
+    /// Réglage de l'état avant la première image.
+    setup: fn(&mut AppState),
+    /// Éléments cliqués, dans l'ordre, avant la capture.
+    clicks: &'a [Id],
+}
+
+impl Default for Shot<'_> {
+    fn default() -> Self {
+        Shot {
+            name: "",
+            theme: ThemeKind::Dark,
+            select: None,
+            hover: None,
+            tooltip: None,
+            size: (1920, 1080),
+            scale: 1.0,
+            setup: |_| {},
+            clicks: &[],
+        }
+    }
 }
 
 fn out_dir() -> PathBuf {
@@ -71,25 +93,39 @@ fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8
     let (w, h) = shot.size;
     let logical = vec2(w as f32 / shot.scale, h as f32 / shot.scale);
     let mut state = AppState::new(file_name, model);
-    state.theme = shot.theme;
+    state.settings.theme = if shot.theme == ThemeKind::Dark { ThemeChoice::Dark } else { ThemeChoice::Light };
     state.selected = shot.select;
+    (shot.setup)(&mut state);
     let mut ui = Ui::new(shell::theme(&state));
-    let frame = |ui: &mut Ui, state: &mut AppState, time: f64, pointer| {
-        ui.begin_frame(FrameInput { size: logical, scale: shot.scale, time, pointer, ..Default::default() });
+    let frame = |ui: &mut Ui, state: &mut AppState, time: f64, pointer, down: bool| {
+        let buttons = [down, false, false];
+        ui.begin_frame(FrameInput { size: logical, scale: shot.scale, time, pointer, buttons, ..Default::default() });
         shell::handle(ui, state);
         ui.theme = shell::theme(state);
         let mut root = shell::build(ui, state);
         ui.finish(&mut root);
     };
-    frame(&mut ui, &mut state, 0.0, None);
+    frame(&mut ui, &mut state, 0.0, None, false);
     let v = state.viewport.get();
     if let Some((lo, hi)) = model.bounds() {
         state.camera.frame(lo, hi, (v.width() / v.height()) as f64);
     }
+    let mut t = 0.1;
+    for id in shot.clicks {
+        frame(&mut ui, &mut state, t, None, false);
+        let p = ui.rect_of(*id).map(|r| r.center());
+        assert!(p.is_some(), "{} : élément à cliquer absent", shot.name);
+        frame(&mut ui, &mut state, t + 0.05, p, true);
+        frame(&mut ui, &mut state, t + 0.1, p, false);
+        t += 0.2;
+    }
+    frame(&mut ui, &mut state, t, None, false);
     let pointer = shot.hover.and_then(|id| ui.rect_of(id)).map(|r| r.center());
-    frame(&mut ui, &mut state, 0.5, pointer);
+    frame(&mut ui, &mut state, t + 0.5, pointer, false);
     ui.force_tooltip = shot.tooltip;
-    frame(&mut ui, &mut state, 2.0, pointer);
+    // Animations terminées (apparition des fenêtres, interrupteurs).
+    frame(&mut ui, &mut state, t + 1.5, pointer, false);
+    frame(&mut ui, &mut state, t + 2.5, pointer, false);
     let mut f = OffscreenFrame::new(gpu, w, h).unwrap();
     let a = ui.theme.color.accent;
     let to8 =
@@ -98,23 +134,75 @@ fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8
     f.render(&mut ui, &state).unwrap()
 }
 
+fn shoot(gpu: &Gpu, model: &Model, shots: &[Shot<'_>]) {
+    for shot in shots {
+        let img = capture(gpu, model, "support.step", shot);
+        check_reference(shot.name, shot.size.0, shot.size.1, &img);
+    }
+}
+
+fn both<'a>(base: Shot<'a>, dark: &'a str, light: &'a str) -> [Shot<'a>; 2] {
+    [Shot { name: dark, theme: ThemeKind::Dark, ..base }, Shot { name: light, theme: ThemeKind::Light, ..base }]
+}
+
+/// Coque en 1920 × 1080 (D-16), dans les deux thèmes (D-06).
 #[test]
 fn coque_deux_themes() {
     let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
     let model = demo::bracket();
-    for (name, theme) in [("coque_sombre", ThemeKind::Dark), ("coque_claire", ThemeKind::Light)] {
-        let shot = Shot {
-            name,
-            theme,
-            select: Some(1),
-            hover: Some(Id::new("pièce").with(3)),
-            tooltip: Some(Id::new("outil").with(1u8)),
-            size: (1280, 800),
-            scale: 1.0,
-        };
-        let img = capture(&gpu, &model, "support.step", &shot);
-        check_reference(shot.name, 1280, 800, &img);
-    }
+    let base = Shot {
+        select: Some(1),
+        hover: Some(Id::new("pièce").with(3)),
+        tooltip: Some(Id::new("outil").with(1u8)),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(base, "coque_sombre", "coque_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Fenêtre des réglages : navigation (liste des schémas ouverte), apparence avec un accent personnalisé.
+#[test]
+fn reglages_deux_themes() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let nav = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 1;
+        },
+        clicks: &[],
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(nav, "reglages_navigation_sombre", "reglages_navigation_claire"));
+    let apparence = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 0;
+            s.settings.accent = 0xe0559b;
+        },
+        hover: Some(Id::new("réglages").with("accent").with(3)),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(apparence, "reglages_apparence_sombre", "reglages_apparence_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Liste des schémas de navigation ouverte (menu au-dessus de la fenêtre modale).
+#[test]
+fn reglages_liste_ouverte() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    static CLICKS: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("réglages").with("schéma")]);
+    let shot = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 1;
+        },
+        clicks: &*CLICKS,
+        hover: Some(Id::new("réglages").with("schéma").with(2)),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(shot, "reglages_liste_sombre", "reglages_liste_claire"));
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
@@ -136,9 +224,9 @@ fn captures_fichier_local() {
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     let select = std::env::var("OBV_SELECT").ok().and_then(|s| s.parse().ok());
     for (n, theme) in [("local_sombre", ThemeKind::Dark), ("local_clair", ThemeKind::Light)] {
-        let shot = Shot { name: n, theme, select, hover: None, tooltip: None, size: (2880, 1800), scale: 2.0 };
+        let shot = Shot { name: n, theme, select, size: (3840, 2160), scale: 2.0, ..Default::default() };
         let img = capture(&gpu, &model, &name, &shot);
-        save_png(&out_dir().join(format!("{n}.png")), 2880, 1800, &img);
+        save_png(&out_dir().join(format!("{n}.png")), 3840, 2160, &img);
     }
 }
 
@@ -147,7 +235,7 @@ fn survol_ligne_arbre() {
     let model = demo::bracket();
     let mut state = AppState::new("support.step", &model);
     let mut ui = Ui::new(shell::theme(&state));
-    let size = vec2(1280.0, 800.0);
+    let size = vec2(1920.0, 1080.0);
     let run = |ui: &mut Ui, state: &mut AppState, time: f64, pointer| {
         ui.begin_frame(FrameInput { size, scale: 1.0, time, pointer, ..Default::default() });
         shell::handle(ui, state);
