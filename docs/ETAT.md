@@ -50,8 +50,9 @@ Mis à jour : 09/11/2026.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
-0. Premier brouillon de version (flux « Version », D-28) ; barre d'activité de 2 px ; réglage de la finesse
-   du maillage STEP dans l'interface ; arbre d'assemblage (chemins lus, pas encore affichés).
+0. Brouillon de version v0.1.0 préparé le 10/11/2026 (archive Windows de 10 Mo, exécutable unique de 24 Mo) :
+   à publier par l'utilisateur après essai. Ensuite : discussion OpenGL, macOS, Linux ; barre d'activité de
+   2 px ; réglage de la finesse du maillage STEP ; arbre d'assemblage (chemins lus, pas encore affichés).
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
 2. Fichiers récents ; menu contextuel de la vue (isoler, masquer, cadrer).
 3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie ;
