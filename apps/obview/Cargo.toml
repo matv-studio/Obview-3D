@@ -7,6 +7,12 @@ publish.workspace = true
 
 [dependencies]
 obv-gpu = { path = "../../crates/obv-gpu" }
+obv-ui = { path = "../../crates/obv-ui" }
+obv-render = { path = "../../crates/obv-render" }
+obv-io = { path = "../../crates/obv-io" }
+
+[dev-dependencies]
+png.workspace = true
 
 [lints]
 workspace = true

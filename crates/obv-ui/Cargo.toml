@@ -1,0 +1,22 @@
+[package]
+name = "obv-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+obv-gpu = { path = "../obv-gpu" }
+bytemuck.workspace = true
+swash = "0.2"
+resvg = { version = "0.49", default-features = false }
+log.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+
+[build-dependencies]
+obv-build = { path = "../obv-build" }
+
+[lints]
+workspace = true

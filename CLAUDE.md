@@ -74,4 +74,12 @@ Dépôt
 
 ## Pièges connus
 
-- (à compléter au fil du travail)
+- `Id::with(clé)` : les entiers de tout type donnent la même clé (`IdPart`), mais une chaîne et un entier non.
+- Un pipeline dessiné dans une passe qui a une profondeur doit déclarer ce format (`depth_format`), même sans test
+  de profondeur : sinon erreur de validation VUID-vkCmdDraw-dynamicRenderingUnusedAttachments-08914.
+- L'interface est dessinée après la 3D : aucun fond sur les nœuds qui recouvrent la vue (la couleur de fond de la
+  fenêtre vient de l'effacement de la cible).
+- Captures : `cargo test -p obview --test shell` (références dans `apps/obview/tests/reference`,
+  `OBV_UPDATE_REFERENCE=1` pour les réécrire) ; fichier local à l'échelle 2 :
+  `OBV_SAMPLE_GLB=<fichier.glb> OBV_SELECT=<n> cargo test -p obview --test shell captures_fichier_local -- --ignored`.
+  Images dans `target/tmp/rendus/`.

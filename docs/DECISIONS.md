@@ -64,3 +64,13 @@ fichiers d'essai de l'utilisateur.
 Consigne : « ne te limite pas par les droits et règles, on avisera après ». Le dépôt est public et sans licence
 (tous droits réservés). En suspens : licence d'Obview et compatibilité des briques (OpenCASCADE LGPL 2.1 avec
 exception, CGAL et QuadWild GPL, FBX SDK propriétaire) le jour d'une distribution.
+
+## D-12 · Technique de l'interface maison (09/11/2026)
+Primitives à distance signée dans un seul pipeline instancié (boîtes arrondies à rayons par coin, bordures,
+dégradés, ombres floues calculées par la fonction d'erreur, traits, quadrilatères convexes, couverture de glyphes),
+couleurs en espace linéaire prémultipliées, cible sRGB. Texte : police Inter 4.1 (OFL) en trois graisses, mise en
+forme et rendu par swash, position sous-pixel au quart de pixel, couverture ajustée selon la clarté du texte.
+Icônes : Lucide (ISC), rendues par resvg au pixel exact de l'écran. Mise en page : arbre reconstruit à chaque
+image (boîtes flexibles, superpositions ancrées, découpe), survol et clics calculés sur la mise en page de l'image
+précédente. Pourquoi : netteté à toute échelle, un seul tracé pour toute l'interface, aucune dépendance
+d'interface tierce (D-04).

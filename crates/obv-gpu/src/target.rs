@@ -53,9 +53,20 @@ impl RenderTarget {
     /// Rend une image : efface (couleur en espace linéaire, profondeur à 0), règle la fenêtre d'affichage
     /// (axe Y vers le haut), exécute `draw`, puis copie le résultat pour [`Self::read_rgba8`].
     pub fn render(&self, clear: [f32; 4], draw: impl FnOnce(vk::CommandBuffer)) -> Result<()> {
+        self.render_with(clear, |_| {}, draw)
+    }
+
+    /// Comme [`Self::render`], avec `prepare` enregistré avant la passe de rendu (envois de données).
+    pub fn render_with(
+        &self,
+        clear: [f32; 4],
+        prepare: impl FnOnce(vk::CommandBuffer),
+        draw: impl FnOnce(vk::CommandBuffer),
+    ) -> Result<()> {
         let d = self.gpu.device().clone();
         let ext = self.extent();
         self.gpu.submit_and_wait(|cmd| unsafe {
+            prepare(cmd);
             let none = (vk::PipelineStageFlags2::TOP_OF_PIPE, vk::AccessFlags2::NONE, vk::ImageLayout::UNDEFINED);
             self.color.barrier(
                 cmd,

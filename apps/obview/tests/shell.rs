@@ -1,0 +1,162 @@
+//! Captures de la coque dans les deux thèmes (D-06), comparées à des références.
+
+use std::path::{Path, PathBuf};
+
+use obv_gpu::{Gpu, GpuDesc};
+use obv_io::Model;
+use obv_ui::{FrameInput, Id, ThemeKind, Ui, vec2};
+use obview::{
+    demo,
+    frame::OffscreenFrame,
+    shell::{self, AppState},
+};
+
+struct Shot<'a> {
+    name: &'a str,
+    theme: ThemeKind,
+    select: Option<usize>,
+    hover: Option<Id>,
+    tooltip: Option<Id>,
+    size: (u32, u32),
+    scale: f32,
+}
+
+fn out_dir() -> PathBuf {
+    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rendus");
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn save_png(path: &Path, w: u32, h: u32, rgba: &[u8]) {
+    let f = std::fs::File::create(path).unwrap();
+    let mut e = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header().unwrap().write_image_data(rgba).unwrap();
+}
+
+fn load_png(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
+    let d = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).ok()?));
+    let mut r = d.read_info().ok()?;
+    let mut buf = vec![0; r.output_buffer_size()?];
+    let info = r.next_frame(&mut buf).ok()?;
+    buf.truncate(info.buffer_size());
+    Some((info.width, info.height, buf))
+}
+
+fn check_reference(name: &str, w: u32, h: u32, rgba: &[u8]) {
+    let actual = out_dir().join(format!("{name}.png"));
+    save_png(&actual, w, h, rgba);
+    let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference").join(format!("{name}.png"));
+    if std::env::var_os("OBV_UPDATE_REFERENCE").is_some() {
+        std::fs::create_dir_all(reference.parent().unwrap()).unwrap();
+        std::fs::copy(&actual, &reference).unwrap();
+        return;
+    }
+    let (rw, rh, expected) = load_png(&reference).unwrap_or_else(|| {
+        panic!("référence absente : {} (OBV_UPDATE_REFERENCE=1 pour la créer)", reference.display())
+    });
+    assert_eq!((rw, rh), (w, h));
+    let bad = rgba
+        .chunks(4)
+        .zip(expected.chunks(4))
+        .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 3))
+        .count();
+    let ratio = bad as f64 / (w * h) as f64;
+    assert!(ratio < 0.002, "{name} : {:.3} % des pixels diffèrent ({})", ratio * 100.0, actual.display());
+}
+
+/// Rend une capture : une image pour la mise en page, puis le survol éventuel, puis l'image finale.
+fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8> {
+    let (w, h) = shot.size;
+    let logical = vec2(w as f32 / shot.scale, h as f32 / shot.scale);
+    let mut state = AppState::new(file_name, model);
+    state.theme = shot.theme;
+    state.selected = shot.select;
+    let mut ui = Ui::new(shell::theme(&state));
+    let frame = |ui: &mut Ui, state: &mut AppState, time: f64, pointer| {
+        ui.begin_frame(FrameInput { size: logical, scale: shot.scale, time, pointer, ..Default::default() });
+        shell::handle(ui, state);
+        ui.theme = shell::theme(state);
+        let mut root = shell::build(ui, state);
+        ui.finish(&mut root);
+    };
+    frame(&mut ui, &mut state, 0.0, None);
+    let v = state.viewport.get();
+    if let Some((lo, hi)) = model.bounds() {
+        state.camera.frame(lo, hi, (v.width() / v.height()) as f64);
+    }
+    let pointer = shot.hover.and_then(|id| ui.rect_of(id)).map(|r| r.center());
+    frame(&mut ui, &mut state, 0.5, pointer);
+    ui.force_tooltip = shot.tooltip;
+    frame(&mut ui, &mut state, 2.0, pointer);
+    let mut f = OffscreenFrame::new(gpu, w, h).unwrap();
+    let a = ui.theme.color.accent;
+    let to8 =
+        |c: f32| (if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 } * 255.0).round() as u8;
+    f.set_model(model, &state, [to8(a.r), to8(a.g), to8(a.b), 255]).unwrap();
+    f.render(&mut ui, &state).unwrap()
+}
+
+#[test]
+fn coque_deux_themes() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    for (name, theme) in [("coque_sombre", ThemeKind::Dark), ("coque_claire", ThemeKind::Light)] {
+        let shot = Shot {
+            name,
+            theme,
+            select: Some(1),
+            hover: Some(Id::new("pièce").with(3)),
+            tooltip: Some(Id::new("outil").with(1u8)),
+            size: (1280, 800),
+            scale: 1.0,
+        };
+        let img = capture(&gpu, &model, "support.step", &shot);
+        check_reference(shot.name, 1280, 800, &img);
+    }
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Captures sur un fichier local (`OBV_SAMPLE_GLB`), à l'échelle 2, sans référence : `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn captures_fichier_local() {
+    let Some(path) = std::env::var_os("OBV_SAMPLE_GLB") else { return };
+    let path = PathBuf::from(path);
+    let t = std::time::Instant::now();
+    let model = obv_io::read_glb(&path).unwrap();
+    eprintln!(
+        "lecture : {:.0} ms, {} pièces, {} triangles",
+        t.elapsed().as_secs_f64() * 1000.0,
+        model.parts.len(),
+        model.triangle_count()
+    );
+    let gpu = Gpu::new(&GpuDesc { validation: false, ..Default::default() }).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    let select = std::env::var("OBV_SELECT").ok().and_then(|s| s.parse().ok());
+    for (n, theme) in [("local_sombre", ThemeKind::Dark), ("local_clair", ThemeKind::Light)] {
+        let shot = Shot { name: n, theme, select, hover: None, tooltip: None, size: (2880, 1800), scale: 2.0 };
+        let img = capture(&gpu, &model, &name, &shot);
+        save_png(&out_dir().join(format!("{n}.png")), 2880, 1800, &img);
+    }
+}
+
+#[test]
+fn survol_ligne_arbre() {
+    let model = demo::bracket();
+    let mut state = AppState::new("support.step", &model);
+    let mut ui = Ui::new(shell::theme(&state));
+    let size = vec2(1280.0, 800.0);
+    let run = |ui: &mut Ui, state: &mut AppState, time: f64, pointer| {
+        ui.begin_frame(FrameInput { size, scale: 1.0, time, pointer, ..Default::default() });
+        shell::handle(ui, state);
+        let mut root = shell::build(ui, state);
+        ui.finish(&mut root);
+    };
+    run(&mut ui, &mut state, 0.0, None);
+    let id = Id::new("pièce").with(3usize);
+    let r = ui.rect_of(id).expect("ligne absente");
+    run(&mut ui, &mut state, 0.5, Some(r.center()));
+    assert!(ui.hovered(id), "la ligne n'est pas survolée");
+}
