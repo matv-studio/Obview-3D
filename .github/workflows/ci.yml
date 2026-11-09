@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  linux:
+    name: Linux (lavapipe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vulkan logiciel et compilateur de shaders
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mesa-vulkan-drivers glslang-tools vulkan-tools vulkan-validationlayers
+          vulkaninfo --summary | grep -E "deviceName|apiVersion|driverInfo"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Analyse (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Essais
+        run: cargo test --workspace
+      - name: Rendus des essais
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendus-linux
+          path: target/tmp/rendus
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows (construction)
+    runs-on: windows-2022
+    env:
+      VULKAN_SDK: C:\VulkanSDK
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-1.4.335.0
+      - name: SDK Vulkan (glslangValidator)
+        if: steps.sdk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/1.4.335.0/windows/vulkansdk-windows-X64-1.4.335.0.exe"
+          Invoke-WebRequest -Uri $url -OutFile vulkansdk.exe
+          Start-Process -FilePath .\vulkansdk.exe -ArgumentList "--root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install copy_only=1" -Wait -NoNewWindow
+          Get-ChildItem C:\VulkanSDK\Bin\glslangValidator.exe
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Analyse (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Construction
+        run: cargo build --workspace --release
+      - name: Exécutable
+        uses: actions/upload-artifact@v4
+        with:
+          name: obview-windows
+          path: target/release/obview.exe

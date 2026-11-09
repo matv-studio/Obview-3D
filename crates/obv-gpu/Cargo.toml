@@ -1,0 +1,23 @@
+[package]
+name = "obv-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ash.workspace = true
+gpu-allocator.workspace = true
+bytemuck.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+glam.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true
+
+[build-dependencies]
+obv-build = { path = "../obv-build" }
