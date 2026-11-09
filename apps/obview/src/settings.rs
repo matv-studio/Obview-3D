@@ -234,7 +234,120 @@ pub struct Settings {
     /// Vitesse du zoom, 0,25 à 4.
     pub zoom_speed: f32,
     pub units: Units,
-    pub view_cube: bool,
+    /// Gizmo de navigation affiché en haut à droite de la vue (D-25).
+    pub gizmo: GizmoStyle,
+    /// Boutons retirés de la barre du bas (les nouveaux boutons apparaissent par défaut).
+    pub toolbar_hidden: Vec<ToolButton>,
+    /// Largeur des panneaux latéraux, 200 à 520 px (charte).
+    pub left_width: f32,
+    pub right_width: f32,
+}
+
+/// Largeurs permises des panneaux latéraux (charte : poignée de largeur 200–520 px).
+pub const PANEL_MIN: f32 = 200.0;
+pub const PANEL_MAX: f32 = 520.0;
+
+/// Gizmo de navigation (D-25).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum GizmoStyle {
+    /// Boules d'axe à la manière de Blender.
+    #[default]
+    Axes,
+    /// Cube de vue opaque à faces nommées (ViewCube).
+    Cube,
+    /// Trièdre compact des logiciels de CAO.
+    Triad,
+    None,
+}
+
+impl GizmoStyle {
+    pub const ALL: [GizmoStyle; 4] = [GizmoStyle::Axes, GizmoStyle::Cube, GizmoStyle::Triad, GizmoStyle::None];
+    pub fn label(self) -> &'static str {
+        match self {
+            GizmoStyle::Axes => "Axes",
+            GizmoStyle::Cube => "Cube",
+            GizmoStyle::Triad => "Trièdre",
+            GizmoStyle::None => "Aucun",
+        }
+    }
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            GizmoStyle::Axes => "Boules d'axe, comme Blender",
+            GizmoStyle::Cube => "Cube à faces nommées : faces, arêtes et coins cliquables",
+            GizmoStyle::Triad => "Trièdre compact, comme les logiciels de CAO",
+            GizmoStyle::None => "Pas de gizmo",
+        }
+    }
+}
+
+/// Boutons de la barre du bas, dans l'ordre d'affichage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ToolButton {
+    Select,
+    Measure,
+    Section,
+    Explode,
+    Render,
+    Projection,
+    Capture,
+    Frame,
+}
+
+impl ToolButton {
+    pub const ALL: [ToolButton; 8] = [
+        ToolButton::Select,
+        ToolButton::Measure,
+        ToolButton::Section,
+        ToolButton::Explode,
+        ToolButton::Render,
+        ToolButton::Projection,
+        ToolButton::Capture,
+        ToolButton::Frame,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolButton::Select => "Sélection",
+            ToolButton::Measure => "Mesurer",
+            ToolButton::Section => "Coupe",
+            ToolButton::Explode => "Vue éclatée",
+            ToolButton::Render => "Vues de rendu",
+            ToolButton::Projection => "Perspective ou orthographique",
+            ToolButton::Capture => "Capture",
+            ToolButton::Frame => "Cadrer tout",
+        }
+    }
+    pub fn icon(self) -> &'static str {
+        match self {
+            ToolButton::Select => "select",
+            ToolButton::Measure => "measure",
+            ToolButton::Section => "section",
+            ToolButton::Explode => "explode",
+            ToolButton::Render => "render",
+            ToolButton::Projection => "projection",
+            ToolButton::Capture => "capture",
+            ToolButton::Frame => "frame",
+        }
+    }
+    pub fn shortcut(self) -> Option<&'static str> {
+        match self {
+            ToolButton::Select => Some("V"),
+            ToolButton::Measure => Some("M"),
+            ToolButton::Section => Some("C"),
+            ToolButton::Explode => Some("E"),
+            ToolButton::Render => Some("R"),
+            ToolButton::Projection => Some("P"),
+            ToolButton::Capture => None,
+            ToolButton::Frame => Some("F"),
+        }
+    }
+    /// Groupe visuel (séparateur entre deux groupes).
+    pub fn group(self) -> u8 {
+        match self {
+            ToolButton::Select | ToolButton::Measure | ToolButton::Section | ToolButton::Explode => 0,
+            ToolButton::Render | ToolButton::Projection | ToolButton::Capture => 1,
+            ToolButton::Frame => 2,
+        }
+    }
 }
 
 /// Étendue de l'accent, enregistrée.
@@ -258,7 +371,10 @@ impl Default for Settings {
             orbit_around_cursor: true,
             zoom_speed: 1.0,
             units: Units::Millimeters,
-            view_cube: true,
+            gizmo: GizmoStyle::Axes,
+            toolbar_hidden: Vec::new(),
+            left_width: 260.0,
+            right_width: 280.0,
         }
     }
 }

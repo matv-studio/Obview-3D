@@ -642,12 +642,22 @@ impl Ui {
         let key_w = key.as_ref().map(|k| k.width + 10.0 + 8.0).unwrap_or(0.0);
         let w = (text.width + key_w + pad.x * 2.0).ceil();
         let h = 26.0;
-        let mut x = (anchor.center().x - w * 0.5).round();
-        x = x.clamp(window.min.x + 6.0, window.max.x - w - 6.0);
-        let mut y = anchor.max.y + 6.0;
-        if y + h > window.max.y - 6.0 {
-            y = anchor.min.y - 6.0 - h;
-        }
+        let (x, y) = if anchor.height() > 120.0 && anchor.height() > anchor.width() * 3.0 {
+            // Élément haut et étroit (poignée) : à côté, à hauteur du pointeur.
+            let py = self.input.pointer.map(|p| p.y).unwrap_or(anchor.center().y);
+            let mut x = anchor.max.x + 8.0;
+            if x + w > window.max.x - 6.0 {
+                x = anchor.min.x - 8.0 - w;
+            }
+            (x.round(), (py - h * 0.5).clamp(window.min.y + 6.0, window.max.y - h - 6.0).round())
+        } else {
+            let x = (anchor.center().x - w * 0.5).round().clamp(window.min.x + 6.0, window.max.x - w - 6.0);
+            let mut y = anchor.max.y + 6.0;
+            if y + h > window.max.y - 6.0 {
+                y = anchor.min.y - 6.0 - h;
+            }
+            (x, y)
+        };
         let r = Rect::from_xywh(x, y, w, h);
         self.dl.shadow(r, 6.0, 10.0, vec2(0.0, 3.0), c.shadow);
         self.dl.rect(r, 6.0, c.tooltip_bg, None);

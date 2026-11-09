@@ -1,13 +1,15 @@
 //! Fenêtre des réglages : rubriques à gauche, réglages groupés en cartes à droite, effet immédiat.
 
 use obv_ui::{
-    ACCENT_PRESETS, Align, Color, Edges, Id, Justify, Layer, Node, Size, TextStyle, Ui, Weight,
+    ACCENT_PRESETS, Align, Color, Edges, Id, Justify, Layer, Node, Size, TextStyle, Tooltip, Ui, Weight,
     controls::{self, TextInput},
     widgets::{self, ButtonKind},
 };
 
 use crate::{
-    settings::{NavAction, NavScheme, Scope, Settings, ThemeChoice, Units, gesture_keys, gestures},
+    settings::{
+        GizmoStyle, NavAction, NavScheme, Scope, Settings, ThemeChoice, ToolButton, Units, gesture_keys, gestures,
+    },
     shell::AppState,
 };
 
@@ -16,15 +18,17 @@ pub enum Section {
     Appearance,
     Navigation,
     Display,
+    Toolbar,
 }
 
 impl Section {
-    const ALL: [Section; 3] = [Section::Appearance, Section::Navigation, Section::Display];
+    const ALL: [Section; 4] = [Section::Appearance, Section::Navigation, Section::Display, Section::Toolbar];
     fn label(self) -> &'static str {
         match self {
             Section::Appearance => "Apparence",
             Section::Navigation => "Navigation",
             Section::Display => "Affichage",
+            Section::Toolbar => "Barre d'outils",
         }
     }
     fn icon(self) -> &'static str {
@@ -32,6 +36,7 @@ impl Section {
             Section::Appearance => "appearance",
             Section::Navigation => "mouse",
             Section::Display => "display",
+            Section::Toolbar => "toolbar",
         }
     }
 }
@@ -272,15 +277,52 @@ fn display(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         s.settings.units = Units::ALL[i];
         s.settings_dirty = true;
     }
-    let (cube, ch) = controls::toggle(ui, id("cube"), s.settings.view_cube);
-    if let Some(v) = ch {
-        s.settings.view_cube = v;
+    let labels: Vec<&str> = GizmoStyle::ALL.iter().map(|g| g.label()).collect();
+    let cur = GizmoStyle::ALL.iter().position(|g| *g == s.settings.gizmo).unwrap_or(0);
+    let (mut seg, picked) = segmented(ui, id("gizmo"), &labels, cur, 280.0);
+    for (child, g) in seg.children.iter_mut().zip(GizmoStyle::ALL) {
+        child.tooltip = Some(Tooltip { text: g.tooltip().into(), shortcut: None });
+    }
+    if let Some(i) = picked {
+        s.settings.gizmo = GizmoStyle::ALL[i];
         s.settings_dirty = true;
     }
     vec![
         section_title(ui, "Vue 3D"),
-        card(ui, vec![setting_row(ui, "Unités", sel), setting_row(ui, "Cube de vue", cube)]),
+        card(ui, vec![setting_row(ui, "Unités", sel), setting_row(ui, "Gizmo de navigation", seg)]),
     ]
+}
+
+/// Boutons de la barre du bas : un interrupteur par bouton, dans l'ordre de la barre (D-25).
+fn toolbar(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
+    let c = ui.theme.color.clone();
+    let mut rows = Vec::new();
+    for b in ToolButton::ALL {
+        let shown = !s.settings.toolbar_hidden.contains(&b);
+        let (sw, ch) = controls::toggle(ui, id("bouton").with(b as u8), shown);
+        if let Some(v) = ch {
+            s.settings.toolbar_hidden.retain(|x| *x != b);
+            if !v {
+                s.settings.toolbar_hidden.push(b);
+            }
+            s.settings_dirty = true;
+        }
+        let label = Node::row()
+            .gap(10.0)
+            .child(Node::icon(b.icon(), 16.0, if shown { c.text } else { c.text_tertiary }))
+            .child(Node::text(b.label(), TextStyle::new(13.0, Weight::Regular), c.text))
+            .children(b.shortcut().map(|k| key_chip(ui, k)));
+        rows.push(
+            Node::row()
+                .width(Size::Fill(1.0))
+                .height(Size::Px(44.0))
+                .padding(Edges::xy(14.0, 0.0))
+                .justify(Justify::SpaceBetween)
+                .child(label)
+                .child(sw),
+        );
+    }
+    vec![section_title(ui, "Barre du bas"), card(ui, rows)]
 }
 
 /// Ajoute la fenêtre des réglages en calque modal si elle est ouverte.
@@ -326,6 +368,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         Section::Appearance => appearance(ui, s),
         Section::Navigation => navigation(ui, s),
         Section::Display => display(ui, s),
+        Section::Toolbar => toolbar(ui, s),
     };
     let content = Node::scroll(id("défilement"))
         .width(Size::Fill(1.0))

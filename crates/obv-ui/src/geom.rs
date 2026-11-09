@@ -41,6 +41,9 @@ impl Rect {
     pub const ZERO: Rect = Rect { min: vec2(0.0, 0.0), max: vec2(0.0, 0.0) };
     pub const INFINITE: Rect = Rect { min: vec2(-1e9, -1e9), max: vec2(1e9, 1e9) };
 
+    pub const fn new(min: Vec2, max: Vec2) -> Self {
+        Rect { min, max }
+    }
     pub fn from_xywh(x: f32, y: f32, w: f32, h: f32) -> Self {
         Rect { min: vec2(x, y), max: vec2(x + w, y + h) }
     }

@@ -22,8 +22,6 @@ pub(crate) static ICONS: &[(&str, &str)] = &[
     ("moon", include_str!("../assets/icons/moon.svg")),
     ("mouse", include_str!("../assets/icons/mouse.svg")),
     ("open", include_str!("../assets/icons/open.svg")),
-    ("panel-left", include_str!("../assets/icons/panel-left.svg")),
-    ("panel-right", include_str!("../assets/icons/panel-right.svg")),
     ("part", include_str!("../assets/icons/part.svg")),
     ("projection", include_str!("../assets/icons/projection.svg")),
     ("render", include_str!("../assets/icons/render.svg")),
@@ -34,6 +32,7 @@ pub(crate) static ICONS: &[(&str, &str)] = &[
     ("settings", include_str!("../assets/icons/settings.svg")),
     ("spinner", include_str!("../assets/icons/spinner.svg")),
     ("sun", include_str!("../assets/icons/sun.svg")),
+    ("toolbar", include_str!("../assets/icons/toolbar.svg")),
     ("triangle", include_str!("../assets/icons/triangle.svg")),
     ("vertex", include_str!("../assets/icons/vertex.svg")),
 ];

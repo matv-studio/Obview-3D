@@ -1,7 +1,7 @@
 //! Composants d'Obview, d'après la charte (section 6). Chacun lit l'état d'interaction de l'image précédente et
 //! renvoie un nœud. Aucune valeur en dur hors des jetons du thème.
 
-use crate::{Align, Anchor, Color, Edges, Id, Justify, Node, Size, TextStyle, Ui, Weight, vec2};
+use crate::{Align, Anchor, Color, Corners, Edges, Id, Justify, Node, Rect, Size, TextStyle, Ui, Weight, vec2};
 
 pub fn text_style(ui: &Ui) -> TextStyle {
     TextStyle::new(ui.theme.size.font_size, Weight::Regular)
@@ -240,20 +240,49 @@ pub fn color_property(ui: &Ui, label: &str, color: Color, value: &str) -> Node {
         )
 }
 
-/// Barre d'outils flottante posée en bas au centre de la vue 3D.
-pub fn floating_toolbar(ui: &Ui, children: Vec<Node>) -> Node {
+/// Rayon du haut de l'onglet et des deux raccords incurvés de la barre du bas (charte : 8 px).
+const TAB_RADIUS: f32 = 8.0;
+
+/// Barre d'outils en onglet du cadre (D-25) : posée sur le bord bas du plateau, couleur du cadre, raccordée au
+/// bord par deux coins incurvés et contournée par le trait du plateau, comme l'onglet de vue actif de la charte.
+/// À placer au-dessus du contour du plateau (dessinée après lui) ; ancrée en bas au centre de son parent, dont
+/// le bas doit coïncider avec celui du plateau.
+pub fn docked_toolbar(ui: &Ui, children: Vec<Node>) -> Node {
     let c = &ui.theme.color;
-    let m = &ui.theme.size;
-    Node::row()
-        .anchor(Anchor { bottom: Some(m.space_l), center_x: true, ..Default::default() })
-        .padding(Edges::all(4.0))
+    let (chrome, line) = (c.app_bg, c.stage_line);
+    let shape = Node::custom(move |p, r| paint_tab(p.dl, r, chrome, line)).fill();
+    let row = Node::row()
+        .padding(Edges { left: 6.0, right: 6.0, top: 6.0, bottom: 2.0 })
         .gap(2.0)
-        .radius(m.radius_floating)
-        .bg(c.floating)
-        .border(1.0, c.border_strong)
-        .shadow(24.0, vec2(0.0, 10.0), c.shadow)
-        .shadow(2.0, vec2(0.0, 1.0), c.shadow.mul_alpha(0.5))
-        .children(children)
+        .align(Align::Center)
+        .children(children);
+    Node::stack().anchor(Anchor { bottom: Some(0.0), center_x: true, ..Default::default() }).child(shape).child(row)
+}
+
+/// Onglet `r` montant du bord bas du plateau (bas de `r`) : remplissage `chrome` qui efface le contour sous lui,
+/// raccords concaves de chaque côté, puis contour d'un pixel côté plateau (`line`).
+pub fn paint_tab(dl: &mut crate::DrawList, r: Rect, chrome: Color, line: Color) {
+    let (x0, x1, y0, yb) = (r.min.x, r.max.x, r.min.y, r.max.y);
+    let (rt, rf) = (TAB_RADIUS, TAB_RADIUS);
+    let top = Corners { tl: rt, tr: rt, br: 0.0, bl: 0.0 };
+    dl.rect(Rect::new(vec2(x0, y0), vec2(x1, yb)), top, chrome, None);
+    // Raccords : hors du coin arrondi d'une grande boîte qui finit au pied de l'onglet, dans un carré de rf.
+    let big = 4096.0;
+    let t = rf + 4.0;
+    for (square, boxr) in [
+        (Rect::new(vec2(x0 - rf, yb - rf), vec2(x0, yb)), Rect::new(vec2(x0 - big, yb - big), vec2(x0, yb))),
+        (Rect::new(vec2(x1, yb - rf), vec2(x1 + rf, yb)), Rect::new(vec2(x1, yb - big), vec2(x1 + big, yb))),
+    ] {
+        dl.push_clip(square);
+        dl.rect(boxr.expand(t), rf + t, Color::TRANSPARENT, Some((t, chrome)));
+        dl.rect(boxr, rf, Color::TRANSPARENT, Some((1.0, line)));
+        dl.pop_clip();
+    }
+    // Contour des flancs et du haut, à l'extérieur de l'onglet, jusqu'au début des raccords.
+    dl.push_clip(Rect::new(vec2(x0 - 1.0, y0 - 1.0), vec2(x1 + 1.0, yb - rf)));
+    let ring = Corners { tl: rt + 1.0, tr: rt + 1.0, br: 0.0, bl: 0.0 };
+    dl.rect(Rect::new(vec2(x0 - 1.0, y0 - 1.0), vec2(x1 + 1.0, yb + 1.0)), ring, Color::TRANSPARENT, Some((1.0, line)));
+    dl.pop_clip();
 }
 
 /// Panneau latéral : colonne plate dans le plateau, séparée de la vue par un trait (D-24).

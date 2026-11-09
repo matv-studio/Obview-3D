@@ -37,12 +37,12 @@ void main() {
     }
     vec2 pos = mix(lo, hi, CORNERS[gl_VertexIndex]);
     v_index = gl_InstanceIndex;
-    // Le fragment lit l'atlas d'après la position non tournée ; seule la position à l'écran tourne.
+    // Le fragment lit l'atlas d'après la position d'origine ; seule la position à l'écran est transformée.
     v_pos = pos;
     if (rotated) {
-        float c = cos(p.border.x), s = sin(p.border.x);
+        vec4 m = p.radii;
         vec2 d = pos - p.border.yz;
-        pos = p.border.yz + vec2(c * d.x - s * d.y, s * d.x + c * d.y);
+        pos = p.border.yz + vec2(m.x * d.x + m.y * d.y, m.z * d.x + m.w * d.y);
     }
     gl_Position = vec4(pos / pc.screen * 2.0 - 1.0, 0.0, 1.0);
 }

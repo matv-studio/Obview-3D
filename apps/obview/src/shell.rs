@@ -7,14 +7,16 @@ use obv_render::Camera;
 use obv_ui::{
     Align, Anchor, Color, Cursor, Edges, Id, Justify, Key, Node, Rect, Size, TextStyle, Theme, ThemeKind, Ui, Weight,
     controls::{self, TextInput},
+    vec2,
     widgets::{self, ButtonKind, TreeRow},
 };
 
 use crate::{
     convert_ui::{self, ConvertState, Request},
+    gizmo,
     inspector::{self, Inspector},
-    settings::{Settings, ThemeChoice, Units},
-    settings_ui, viewcube,
+    settings::{GizmoStyle, PANEL_MAX, PANEL_MIN, Settings, ThemeChoice, ToolButton, Units},
+    settings_ui,
 };
 
 /// Hauteur d'une ligne de l'arbre (liste virtuelle : hauteur fixe).
@@ -76,6 +78,10 @@ pub struct AppState {
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
     /// Rectangle de la vue 3D après la dernière mise en page (pixels logiques).
     pub viewport: Rc<Cell<Rect>>,
+    /// Rectangle du plateau (vue et panneaux) à la dernière image.
+    pub stage: Rc<Cell<Rect>>,
+    /// Poignée de panneau tenue : côté, abscisse de l'appui, déjà glissée.
+    pub grip_press: Option<(u8, f32, bool)>,
 }
 
 impl AppState {
@@ -129,6 +135,8 @@ impl AppState {
             requests: Vec::new(),
             loading: None,
             viewport: Rc::new(Cell::new(Rect::ZERO)),
+            stage: Rc::new(Cell::new(Rect::ZERO)),
+            grip_press: None,
         }
     }
 
@@ -328,13 +336,18 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         .gap(6.0)
         .child(Node::icon("layers", 13.0, c.text_tertiary))
         .child(Node::text(shown, TextStyle::new(11.5, Weight::Regular), c.text_tertiary));
-    widgets::panel(ui, 260.0).border_right(c.border).child(header).child(list).child(widgets::divider(ui)).child(footer)
+    widgets::panel(ui, s.settings.left_width)
+        .border_right(c.border)
+        .child(header)
+        .child(list)
+        .child(widgets::divider(ui))
+        .child(footer)
 }
 
 fn properties_panel(ui: &mut Ui, s: &AppState) -> Node {
     let units = s.settings.units;
     let c = ui.theme.color.clone();
-    let mut col = widgets::panel(ui, 280.0).border_left(c.border).padding(Edges::xy(0.0, 6.0));
+    let mut col = widgets::panel(ui, s.settings.right_width).border_left(c.border).padding(Edges::xy(0.0, 6.0));
     match s.selected.and_then(|i| s.parts.get(i)) {
         Some(p) => {
             col.push(
@@ -381,56 +394,118 @@ fn properties_panel(ui: &mut Ui, s: &AppState) -> Node {
     col
 }
 
+/// Identifiant d'un bouton de la barre du bas (les outils partagent « outil »).
+pub fn tool_button_id(b: ToolButton) -> Id {
+    match b {
+        ToolButton::Select => Id::new("outil").with(Tool::Select as u8),
+        ToolButton::Measure => Id::new("outil").with(Tool::Measure as u8),
+        ToolButton::Section => Id::new("outil").with(Tool::Section as u8),
+        ToolButton::Explode => Id::new("outil").with(Tool::Explode as u8),
+        ToolButton::Render => Id::new("rendu"),
+        ToolButton::Projection => Id::new("projection"),
+        ToolButton::Capture => Id::new("capture"),
+        ToolButton::Frame => Id::new("cadrer"),
+    }
+}
+
+/// Barre du bas : boutons choisis dans les réglages, séparateur entre deux groupes (D-25).
+fn toolbar(ui: &mut Ui, s: &AppState) -> Option<Node> {
+    let mut items = Vec::new();
+    let mut last_group = None;
+    for b in ToolButton::ALL {
+        if s.settings.toolbar_hidden.contains(&b) {
+            continue;
+        }
+        if last_group.is_some_and(|g| g != b.group()) {
+            items.push(widgets::toolbar_separator(ui));
+        }
+        last_group = Some(b.group());
+        let active = match b {
+            ToolButton::Select => s.tool == Tool::Select,
+            ToolButton::Measure => s.tool == Tool::Measure,
+            ToolButton::Section => s.tool == Tool::Section,
+            ToolButton::Explode => s.tool == Tool::Explode,
+            ToolButton::Render => s.inspector != Inspector::Off,
+            _ => false,
+        };
+        items.push(widgets::icon_button(ui, tool_button_id(b), b.icon(), b.label(), b.shortcut(), active));
+    }
+    (!items.is_empty()).then(|| widgets::docked_toolbar(ui, items))
+}
+
+/// Poignée d'un panneau latéral (0 : gauche, 1 : droite) : clic pour afficher ou masquer, glisser pour régler
+/// la largeur (200 à 520 px, charte). Posée sur le bord du plateau ou du panneau ouvert.
+fn grip(ui: &mut Ui, s: &AppState, side: u8) -> Node {
+    let id = grip_id(side);
+    let c = ui.theme.color.clone();
+    let open = if side == 0 { s.left_open } else { s.right_open };
+    let width = if side == 0 { s.settings.left_width } else { s.settings.right_width };
+    let edge = if open { width } else { 0.0 };
+    let t = ui.anim(id.with("survol"), if ui.hovered(id) || ui.is_active(id) { 1.0 } else { 0.0 }, 120.0);
+    // Zone sensible de 10 px : 3 px vers l'extérieur, 7 px vers la vue.
+    let (hit_w, out) = (10.0, 3.0);
+    let line = if c.has_accent { c.accent } else { c.text_tertiary };
+    let pill_rest = c.text_tertiary.with_alpha(0.55);
+    let pill_hover = c.text;
+    let node = Node::custom(move |p, r| {
+        // Bord du panneau (ou du plateau) dans le rectangle de la poignée.
+        let bx = if side == 0 { r.min.x + out } else { r.max.x - out };
+        if open && t > 0.01 {
+            let x = bx - 1.0;
+            p.dl.rect(Rect::new(vec2(x, r.min.y), vec2(x + 2.0, r.max.y)), 0.0, line.with_alpha(t), None);
+        }
+        // Pastille de prise au milieu : sur le trait si le panneau est ouvert, juste à l'intérieur sinon.
+        let px = if open {
+            bx - 2.0
+        } else if side == 0 {
+            bx + 4.0
+        } else {
+            bx - 8.0
+        };
+        let h = 40.0;
+        let y = r.center().y - h * 0.5;
+        p.dl.rect(Rect::from_xywh(px, y, 4.0, h), 2.0, pill_rest.mix(pill_hover, t), None);
+    })
+    .id(id)
+    .cursor(Cursor::ResizeHorizontal)
+    .tooltip_shortcut(if side == 0 { "Pièces" } else { "Propriétés" }, if side == 0 { "Ctrl [" } else { "Ctrl ]" })
+    .width(Size::Px(hit_w))
+    .height(Size::Fill(1.0));
+    let a = if side == 0 {
+        Anchor { left: Some(edge - out), top: Some(0.0), bottom: Some(0.0), ..Default::default() }
+    } else {
+        Anchor { right: Some(edge - out), top: Some(0.0), bottom: Some(0.0), ..Default::default() }
+    };
+    node.anchor(a)
+}
+
+pub fn grip_id(side: u8) -> Id {
+    Id::new("poignée").with(side)
+}
+
 fn viewport(ui: &mut Ui, s: &AppState) -> Node {
-    let tool = |ui: &mut Ui, t: Tool, icon: &'static str, tip: &str, key: &str| {
-        widgets::icon_button(ui, Id::new("outil").with(t as u8), icon, tip, Some(key), s.tool == t)
-    };
-    let items = vec![
-        widgets::icon_button(ui, Id::new("panneau gauche"), "panel-left", "Pièces", Some("Ctrl ["), s.left_open),
-        widgets::toolbar_separator(ui),
-        tool(ui, Tool::Select, "select", "Sélection", "V"),
-        tool(ui, Tool::Measure, "measure", "Mesurer", "M"),
-        tool(ui, Tool::Section, "section", "Coupe", "C"),
-        tool(ui, Tool::Explode, "explode", "Vue éclatée", "E"),
-        widgets::toolbar_separator(ui),
-        widgets::icon_button(ui, Id::new("rendu"), "render", "Vues de rendu", Some("R"), s.inspector != Inspector::Off),
-        widgets::icon_button(
-            ui,
-            Id::new("projection"),
-            "projection",
-            "Perspective ou orthographique",
-            Some("P"),
-            false,
-        ),
-        widgets::icon_button(ui, Id::new("capture"), "capture", "Capture", None, false),
-        widgets::toolbar_separator(ui),
-        widgets::icon_button(ui, Id::new("cadrer"), "frame", "Cadrer tout", Some("F"), false),
-        widgets::toolbar_separator(ui),
-        widgets::icon_button(ui, Id::new("panneau droit"), "panel-right", "Propriétés", Some("Ctrl ]"), s.right_open),
-    ];
-    let toolbar = widgets::floating_toolbar(ui, items);
     let rect_cell = s.viewport.clone();
-    let (yaw, pitch) = (s.camera.yaw as f32, s.camera.pitch as f32);
-    let theme = ui.theme.clone();
-    let cube_id = Id::new("cube de vue");
-    let hover = match (ui.hovered(cube_id), ui.rect_of(cube_id), ui.input.pointer) {
-        (true, Some(r), Some(p)) => viewcube::pick(r, yaw, pitch, p),
-        _ => None,
-    };
-    let active =
-        ui.anim(cube_id.with("disque"), if ui.hovered(cube_id) || ui.is_active(cube_id) { 1.0 } else { 0.0 }, 120.0);
     let mut root = Node::stack().fill().child(Node::custom(move |_, r| rect_cell.set(r)).fill());
     if let Some(layer) = inspector::overlay(ui, s) {
         root.push(layer);
     }
-    root.push(toolbar);
-    if s.settings.view_cube {
+    let style = s.settings.gizmo;
+    if style != GizmoStyle::None {
+        let (yaw, pitch) = (s.camera.yaw as f32, s.camera.pitch as f32);
+        let theme = ui.theme.clone();
+        let gid = Id::new("gizmo");
+        let hover = match (ui.hovered(gid), ui.rect_of(gid), ui.input.pointer) {
+            (true, Some(r), Some(p)) => gizmo::pick(style, r, yaw, pitch, p),
+            _ => None,
+        };
+        let active = ui.anim(gid.with("disque"), if ui.hovered(gid) || ui.is_active(gid) { 1.0 } else { 0.0 }, 120.0);
+        let side = gizmo::size(style);
         root.push(
-            Node::custom(move |p, r| viewcube::paint(p, r, yaw, pitch, hover, active, &theme))
-                .id(cube_id)
+            Node::custom(move |p, r| gizmo::paint(style, p, r, yaw, pitch, hover, active, &theme))
+                .id(gid)
                 .cursor(if hover.is_some() { Cursor::Default } else { Cursor::Grab })
-                .tooltip(hover.map(viewcube::name).unwrap_or_else(|| "Orienter la vue".into()))
-                .size(Size::Px(124.0), Size::Px(124.0))
+                .tooltip(hover.map(gizmo::name).unwrap_or_else(|| "Orienter la vue".into()))
+                .size(Size::Px(side), Size::Px(side))
                 .anchor(Anchor { top: Some(12.0), right: Some(12.0), ..Default::default() }),
         );
     }
@@ -444,6 +519,7 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
 pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     let m = ui.theme.size.clone();
     let c = ui.theme.color.clone();
+    let (lw, rw) = (s.settings.left_width, s.settings.right_width);
     let body = Node::row()
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
@@ -454,18 +530,80 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     let (radius, margin) = (m.radius_stage, m.stage_margin);
     // La vue 3D est dessinée avant l'interface : un anneau couleur du cadre recouvre ce qui dépasse des
     // coins arrondis, puis le contour du plateau est tracé par-dessus.
+    let stage_cell = s.stage.clone();
     let frame = Node::custom(move |p, r| {
+        stage_cell.set(r);
         p.dl.rect(r.expand(margin), radius + margin, Color::TRANSPARENT, Some((margin, c.app_bg)));
         p.dl.rect(r, radius, Color::TRANSPARENT, Some((1.0, c.stage_line)));
     })
     .fill();
-    let stage = Node::stack().fill().child(body).child(frame);
+    // Au-dessus du contour : barre du bas en onglet (centrée sur la vue) et poignées des panneaux.
+    let spacer = |w: f32| Node::new().width(Size::Px(w)).height(Size::Fill(1.0));
+    let lane = Node::row()
+        .fill()
+        .align(Align::Stretch)
+        .children(s.left_open.then(|| spacer(lw)))
+        .child(Node::stack().fill().children(toolbar(ui, s)))
+        .children(s.right_open.then(|| spacer(rw)));
+    let overlay = Node::stack().fill().child(lane).child(grip(ui, s, 0)).child(grip(ui, s, 1));
+    let stage = Node::stack().fill().child(body).child(frame).child(overlay);
     let root = Node::column().fill().child(topbar(ui, s)).child(
         Node::stack().fill().padding(Edges { left: margin, right: margin, top: 0.0, bottom: margin }).child(stage),
     );
     settings_ui::dialog(ui, s);
     convert_ui::dialog(ui, s);
     root
+}
+
+/// Poignées des panneaux : un clic affiche ou masque, un glisser règle la largeur ; tiré sous la moitié de la
+/// largeur minimale, le panneau se masque.
+fn handle_grips(ui: &mut Ui, s: &mut AppState) {
+    for side in [0u8, 1] {
+        let id = grip_id(side);
+        if ui.press_started(id)
+            && let Some(p) = ui.input.pointer
+        {
+            s.grip_press = Some((side, p.x, false));
+        }
+        if let Some(p) = ui.dragging(id)
+            && let Some((sd, x0, moved)) = s.grip_press
+            && sd == side
+        {
+            if !moved && (p.x - x0).abs() < 3.0 {
+                continue;
+            }
+            s.grip_press = Some((sd, x0, true));
+            let st = s.stage.get();
+            let w = if side == 0 { p.x - st.min.x } else { st.max.x - p.x };
+            let open = w >= PANEL_MIN * 0.5;
+            let w = w.clamp(PANEL_MIN, PANEL_MAX.min((st.width() - 240.0).max(PANEL_MIN)));
+            if side == 0 {
+                s.left_open = open;
+                if open {
+                    s.settings.left_width = w.round();
+                }
+            } else {
+                s.right_open = open;
+                if open {
+                    s.settings.right_width = w.round();
+                }
+            }
+        }
+        if ui.clicked(id) {
+            let dragged = s.grip_press.is_some_and(|(sd, _, moved)| sd == side && moved);
+            s.grip_press = None;
+            if dragged {
+                s.settings_dirty = true;
+            } else if side == 0 {
+                s.left_open = !s.left_open;
+            } else {
+                s.right_open = !s.right_open;
+            }
+        }
+    }
+    if !ui.is_active_any() {
+        s.grip_press = None;
+    }
 }
 
 /// Applique les clics et raccourcis de l'image.
@@ -477,12 +615,13 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     if ui.clicked(Id::new("réglages")) {
         s.settings_open = true;
     }
-    if ui.clicked(Id::new("panneau gauche")) || (ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('['))) {
+    if ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('[')) {
         s.left_open = !s.left_open;
     }
-    if ui.clicked(Id::new("panneau droit")) || (ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char(']'))) {
+    if ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char(']')) {
         s.right_open = !s.right_open;
     }
+    handle_grips(ui, s);
     if ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('\\')) {
         let open = !(s.left_open || s.right_open);
         s.left_open = open;

@@ -97,7 +97,10 @@ pub fn overlay(ui: &mut Ui, s: &AppState) -> Option<Node> {
         let view = s.viewport.get();
         let sp = span(view, s);
         // Zone du gizmo (en haut à droite) que les noms évitent.
-        let gizmo = if s.settings.view_cube { 150.0 } else { 0.0 };
+        let gizmo = match s.settings.gizmo {
+            crate::settings::GizmoStyle::None => 0.0,
+            g => crate::gizmo::size(g) + 26.0,
+        };
         layer.push(
             Node::custom(move |p, r| {
                 let n = normal();

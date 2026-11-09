@@ -18,6 +18,8 @@ struct Shot<'a> {
     theme: ThemeKind,
     select: Option<usize>,
     hover: Option<Id>,
+    /// Point survolé dans le rectangle de `hover`, en fractions (centre par défaut).
+    hover_at: (f32, f32),
     tooltip: Option<Id>,
     size: (u32, u32),
     scale: f32,
@@ -34,6 +36,7 @@ impl Default for Shot<'_> {
             theme: ThemeKind::Dark,
             select: None,
             hover: None,
+            hover_at: (0.5, 0.5),
             tooltip: None,
             size: (1920, 1080),
             scale: 1.0,
@@ -120,7 +123,9 @@ fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8
         t += 0.2;
     }
     frame(&mut ui, &mut state, t, None, false);
-    let pointer = shot.hover.and_then(|id| ui.rect_of(id)).map(|r| r.center());
+    let (fx, fy) = shot.hover_at;
+    let pointer =
+        shot.hover.and_then(|id| ui.rect_of(id)).map(|r| vec2(r.min.x + r.width() * fx, r.min.y + r.height() * fy));
     frame(&mut ui, &mut state, t + 0.5, pointer, false);
     ui.force_tooltip = shot.tooltip;
     // Animations terminées (apparition des fenêtres, interrupteurs).
@@ -151,8 +156,11 @@ fn both<'a>(base: Shot<'a>, dark: &'a str, light: &'a str) -> [Shot<'a>; 2] {
 fn coque_deux_themes() {
     let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
     let model = demo::bracket();
-    let base = Shot { select: Some(1), hover: Some(Id::new("cube de vue")), ..Default::default() };
+    let base = Shot { select: Some(1), hover: Some(Id::new("gizmo")), ..Default::default() };
     shoot(&gpu, &model, &both(base, "coque_sombre", "coque_claire"));
+    // Poignée du panneau de gauche survolée, avec son info-bulle.
+    let grip = Shot { hover: Some(shell::grip_id(0)), tooltip: Some(shell::grip_id(0)), ..Default::default() };
+    shoot(&gpu, &model, &both(grip, "coque_poignee_sombre", "coque_poignee_claire"));
     let panels = Shot {
         select: Some(1),
         hover: Some(Id::new("pièce").with(3)),
@@ -191,6 +199,51 @@ fn reglages_deux_themes() {
         ..Default::default()
     };
     shoot(&gpu, &model, &both(apparence, "reglages_apparence_sombre", "reglages_apparence_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Gizmos de navigation (D-25) : cube survolé, trièdre.
+#[test]
+fn gizmos_deux_themes() {
+    use obview::settings::GizmoStyle;
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let cube = Shot {
+        hover: Some(Id::new("gizmo")),
+        hover_at: (0.5, 0.42),
+        setup: |s| s.settings.gizmo = GizmoStyle::Cube,
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(cube, "gizmo_cube_sombre", "gizmo_cube_clair"));
+    let triad = Shot { setup: |s| s.settings.gizmo = GizmoStyle::Triad, ..Default::default() };
+    shoot(&gpu, &model, &both(triad, "gizmo_triedre_sombre", "gizmo_triedre_clair"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Réglages : affichage (choix du gizmo) et boutons de la barre du bas (capture retirée).
+#[test]
+fn reglages_barre_et_affichage() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let bar = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 3;
+            s.settings.toolbar_hidden = vec![obview::settings::ToolButton::Capture];
+        },
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(bar, "reglages_barre_sombre", "reglages_barre_claire"));
+    let display = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 2;
+        },
+        hover: Some(Id::new("réglages").with("gizmo").with(1)),
+        tooltip: Some(Id::new("réglages").with("gizmo").with(1)),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(display, "reglages_affichage_sombre", "reglages_affichage_claire"));
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 

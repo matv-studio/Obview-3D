@@ -356,16 +356,17 @@ impl App {
         {
             frame_all(&mut self.nav, &self.state.camera, &self.model, view, now);
         }
-        // Cube de vue : clic sur une face, une arête ou un coin ; glisser pour tourner.
-        let cube = Id::new("cube de vue");
+        // Gizmo de navigation : clic sur un axe, une face, une arête ou un coin ; glisser pour tourner.
+        let cube = Id::new("gizmo");
+        let style = self.state.settings.gizmo;
         if let Some(r) = self.ui.rect_of(cube) {
             let cam = self.state.camera;
             if self.ui.clicked(cube)
                 && let Some(p) = input.pointer
                 && !std::mem::take(&mut self.cube_dragged)
-                && let Some(dir) = crate::viewcube::pick(r, cam.yaw as f32, cam.pitch as f32, p)
+                && let Some(dir) = crate::gizmo::pick(style, r, cam.yaw as f32, cam.pitch as f32, p)
             {
-                let (yaw, pitch) = crate::viewcube::angles(dir, cam.yaw);
+                let (yaw, pitch) = crate::gizmo::angles(dir, cam.yaw);
                 self.nav.animate_to(&cam, Camera { yaw, pitch, ..cam }, now);
             } else if self.ui.clicked(cube) {
                 self.cube_dragged = false;

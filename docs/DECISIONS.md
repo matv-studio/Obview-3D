@@ -230,3 +230,22 @@ survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser
 - Geist n'a pas d'espace fine insécable (séparateur des milliers) : espace synthétique de 0,2 cadratin.
 - En suspens : onglets de vue de la charte (une seule vue aujourd'hui), barre d'activité de 2 px en haut de la
   fenêtre pendant les lectures et conversions, panneaux ancrables et redimensionnables.
+
+## D-25 · Barre du bas en onglet, poignées des panneaux, gizmos au choix (09/11/2026)
+- Barre du bas : onglet du cadre posé sur le bord bas du plateau (couleur `chrome`), haut arrondi de 8 px,
+  raccordé au bord par deux coins incurvés de 8 px, contourné par le trait du plateau, boutons à 2 px du bord
+  (capture de l'utilisateur ; charte : onglet de vue raccordé). Dessinée après le contour du plateau, centrée
+  sur la vue entre les panneaux. Les deux boutons de panneaux sont retirés.
+- Boutons de la barre choisis dans les réglages (rubrique « Barre d'outils », un interrupteur par bouton) ;
+  seuls les boutons retirés sont enregistrés, un nouveau bouton apparaît donc par défaut ; séparateurs entre
+  groupes non vides ; les raccourcis restent actifs même pour un bouton retiré.
+- Poignées des panneaux (charte : poignée de largeur 200–520 px) : une de chaque côté, sur le bord du plateau
+  panneau fermé, sur le bord du panneau ouvert. Clic : afficher / masquer ; glisser : largeur (tiré sous
+  100 px, le panneau se masque) ; largeurs enregistrées. Pastille de prise au milieu, trait de 2 px au
+  survol, info-bulle à côté du pointeur (règle générale pour les éléments hauts et étroits).
+- Gizmo de navigation au choix (réglage « Gizmo de navigation ») : Axes (boules à la manière de Blender, par
+  défaut), Cube (ViewCube opaque, faces nommées posées sur les faces par une transformation affine exacte en
+  projection orthographique, dessus et dessous orientés pour rester lisibles, 26 directions, anneau de sol),
+  Trièdre (CAO, compact), Aucun. Le cube semi-transparent traversé d'axes (D-21) est abandonné.
+- Bibliothèque d'interface : la rotation du texte et des icônes devient une transformation affine 2 × 2
+  (`DrawList::set_transform`).

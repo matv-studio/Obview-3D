@@ -67,29 +67,37 @@ pub struct DrawList {
     pub prims: Vec<Prim>,
     clips: Vec<Rect>,
     pub scale: f32,
-    /// Rotation appliquée aux glyphes et icônes : pivot (pixels de l'écran) et angle (radians).
-    rotation: Option<([f32; 2], f32)>,
+    /// Transformation affine appliquée aux glyphes et icônes : pivot (pixels de l'écran) et matrice 2 × 2
+    /// (a, b, c, d) : x' = a·x + b·y, y' = c·x + d·y autour du pivot.
+    transform: Option<([f32; 2], [f32; 4])>,
 }
 
 impl DrawList {
     pub fn new(scale: f32) -> Self {
-        DrawList { prims: Vec::new(), clips: vec![Rect::INFINITE], scale, rotation: None }
+        DrawList { prims: Vec::new(), clips: vec![Rect::INFINITE], scale, transform: None }
     }
 
     pub fn clear(&mut self, scale: f32) {
         self.prims.clear();
         self.clips.truncate(1);
         self.scale = scale;
-        self.rotation = None;
+        self.transform = None;
     }
 
     /// Fait tourner le texte et les icônes dessinés ensuite autour de `pivot` (pixels logiques), d'un angle en
     /// radians (sens horaire à l'écran). La découpe ne s'applique pas au texte tourné.
     pub fn set_rotation(&mut self, pivot: Vec2, angle: f32) {
-        self.rotation = Some(([pivot.x * self.scale, pivot.y * self.scale], angle));
+        let (c, s) = (angle.cos(), angle.sin());
+        self.set_transform(pivot, [c, -s, s, c]);
+    }
+    /// Transformation affine du texte et des icônes dessinés ensuite autour de `pivot` (pixels logiques) :
+    /// matrice (a, b, c, d) appliquée au décalage depuis le pivot. Sert à poser du texte sur une face vue en
+    /// projection orthographique (exactement affine).
+    pub fn set_transform(&mut self, pivot: Vec2, m: [f32; 4]) {
+        self.transform = Some(([pivot.x * self.scale, pivot.y * self.scale], m));
     }
     pub fn clear_rotation(&mut self) {
-        self.rotation = None;
+        self.transform = None;
     }
 
     fn clip(&self) -> [f32; 4] {
@@ -199,11 +207,11 @@ impl DrawList {
         self.prims.push(Prim {
             rect: device_rect,
             clip: self.clip(),
-            radii: [0.0; 4],
+            radii: self.transform.map(|(_, m)| m).unwrap_or([1.0, 0.0, 0.0, 1.0]),
             color0: color.premul(),
             color1: color.premul(),
-            border: match self.rotation {
-                Some((p, a)) => [a, p[0], p[1], 1.0],
+            border: match self.transform {
+                Some((p, _)) => [0.0, p[0], p[1], 1.0],
                 None => [0.0; 4],
             },
             uv,

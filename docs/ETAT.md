@@ -3,7 +3,7 @@
 Mis à jour : 09/11/2026.
 
 ## Fait
-- Décisions D-01 à D-24 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-25 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -41,10 +41,14 @@ Mis à jour : 09/11/2026.
 - Passe d'interface sur la charte des apps (D-24) : Geist, gris neutres, accent facultatif et son étendue,
   plateau arrondi, icônes maison 16 × 16, composants refaits ; captures vérifiées en 1920 × 1080 et
   2560 × 1440 dans les deux thèmes.
+- Barre du bas en onglet du cadre, boutons choisis dans les réglages ; poignées des panneaux (clic, glisser
+  200–520 px) ; gizmo au choix : Axes (défaut), Cube, Trièdre, Aucun (D-25). Vérifié aussi en fenêtre réelle.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
-0. Charte : barre d'activité de 2 px (lecture, conversion), panneaux redimensionnables.
+0. Fonctions encore absentes (préalable au premier build complet) : Mesurer, Coupe, Vue éclatée, bascule
+   perspective / orthographique, Capture, onglet « Vues » ; lecture STEP / IGES (point 6) ; barre d'activité
+   de 2 px (charte).
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
 2. Fichiers récents ; menu contextuel de la vue (isoler, masquer, cadrer).
 3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie ;
