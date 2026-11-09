@@ -145,18 +145,25 @@ fn both<'a>(base: Shot<'a>, dark: &'a str, light: &'a str) -> [Shot<'a>; 2] {
     [Shot { name: dark, theme: ThemeKind::Dark, ..base }, Shot { name: light, theme: ThemeKind::Light, ..base }]
 }
 
-/// Coque en 1920 × 1080 (D-16), dans les deux thèmes (D-06).
+/// Coque en 1920 × 1080 (D-16), dans les deux thèmes (D-06) : vue seule par défaut (gizmo survolé), puis
+/// panneaux ouverts avec une sélection.
 #[test]
 fn coque_deux_themes() {
     let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
     let model = demo::bracket();
-    let base = Shot {
+    let base = Shot { select: Some(1), hover: Some(Id::new("cube de vue")), ..Default::default() };
+    shoot(&gpu, &model, &both(base, "coque_sombre", "coque_claire"));
+    let panels = Shot {
         select: Some(1),
         hover: Some(Id::new("pièce").with(3)),
         tooltip: Some(Id::new("outil").with(1u8)),
+        setup: |s| {
+            s.left_open = true;
+            s.right_open = true;
+        },
         ..Default::default()
     };
-    shoot(&gpu, &model, &both(base, "coque_sombre", "coque_claire"));
+    shoot(&gpu, &model, &both(panels, "coque_panneaux_sombre", "coque_panneaux_claire"));
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
@@ -286,6 +293,7 @@ fn survol_ligne_arbre() {
         let mut root = shell::build(ui, state);
         ui.finish(&mut root);
     };
+    state.left_open = true;
     run(&mut ui, &mut state, 0.0, None);
     let id = Id::new("pièce").with(3usize);
     let r = ui.rect_of(id).expect("ligne absente");

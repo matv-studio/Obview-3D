@@ -3,7 +3,7 @@
 Mis à jour : 09/11/2026.
 
 ## Fait
-- Décisions D-01 à D-20 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-21 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -35,8 +35,8 @@ Mis à jour : 09/11/2026.
 - Moteur de conversion `obv-mesh` (D-20) : écart garanti mesuré, GLB / OBJ / FBX ; fenêtre « Convertir »
   (format, précision, écart en mm, progression, bilan, ouverture du résultat) ; en ligne de commande :
   `obview --convertir <entrée> <sortie> --ecart <mm>`.
-- Cube de vue : 26 directions (faces, arêtes, coins) au clic avec transition, survol en couleur d'accent,
-  glisser pour tourner.
+- Gizmo de navigation (D-21) : cube semi-transparent et axes réunis, 26 directions au clic, glisser pour tourner.
+- Panneaux latéraux masqués par défaut, ouverts depuis la barre du bas (D-21).
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes

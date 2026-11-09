@@ -161,3 +161,10 @@ contrôle en 2560 × 1440 (échelle 1,25 à 1,5).
 - En suspens : simplification propre aux surfaces courbes (coût de collapse qui mesure l'écart au milieu des
   arêtes), compression EXT_meshopt_compression et quantification pour le GLB, UV et matériaux.
 
+## D-21 · Vue d'abord, gizmo unique (09/11/2026)
+Demandes de l'utilisateur : panneaux latéraux masqués au démarrage, ouverts par deux boutons aux extrémités de la
+barre du bas (Ctrl+[ et Ctrl+], Ctrl+\\ pour les deux) ; bandes de l'inspecteur de largeur égale sur toute la
+vue (mesurée à mi-hauteur), quel que soit le modèle ; cube de vue et trièdre réunis en un gizmo à la Blender :
+cube semi-transparent traversé par les axes, boules lettrées côté positif et cerclées côté négatif, disque au
+survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser pour tourner.
+

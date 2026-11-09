@@ -57,6 +57,9 @@ pub struct AppState {
     pub left_tab: usize,
     pub search: String,
     pub camera: Camera,
+    /// Panneaux latéraux ouverts (masqués par défaut : la vue occupe tout l'écran).
+    pub left_open: bool,
+    pub right_open: bool,
     /// Vues de rendu (D-15).
     pub inspector: Inspector,
     /// Fenêtre de conversion.
@@ -105,6 +108,8 @@ impl AppState {
             search: String::new(),
             camera: Camera::default(),
             inspector: Inspector::Off,
+            left_open: false,
+            right_open: false,
             scene_bounds: model.bounds(),
             convert: ConvertState::default(),
             requests: Vec::new(),
@@ -366,6 +371,8 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
         widgets::icon_button(ui, Id::new("outil").with(t as u8), icon, tip, Some(key), s.tool == t)
     };
     let items = vec![
+        widgets::icon_button(ui, Id::new("panneau gauche"), "panel-left", "Pièces", Some("Ctrl ["), s.left_open),
+        widgets::toolbar_separator(ui),
         tool(ui, Tool::Select, "mouse-pointer-2", "Sélection", "V"),
         tool(ui, Tool::Measure, "ruler", "Mesurer", "M"),
         tool(ui, Tool::Section, "scissors", "Coupe", "C"),
@@ -376,6 +383,8 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
         widgets::icon_button(ui, Id::new("capture"), "camera", "Capture", None, false),
         widgets::toolbar_separator(ui),
         widgets::icon_button(ui, Id::new("cadrer"), "focus", "Cadrer tout", Some("F"), false),
+        widgets::toolbar_separator(ui),
+        widgets::icon_button(ui, Id::new("panneau droit"), "panel-right", "Propriétés", Some("Ctrl ]"), s.right_open),
     ];
     let toolbar = widgets::floating_toolbar(ui, items);
     let rect_cell = s.viewport.clone();
@@ -386,6 +395,8 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
         (true, Some(r), Some(p)) => viewcube::pick(r, yaw, pitch, p),
         _ => None,
     };
+    let active =
+        ui.anim(cube_id.with("disque"), if ui.hovered(cube_id) || ui.is_active(cube_id) { 1.0 } else { 0.0 }, 120.0);
     let mut root = Node::stack().fill().child(Node::custom(move |_, r| rect_cell.set(r)).fill());
     if let Some(layer) = inspector::overlay(ui, s) {
         root.push(layer);
@@ -393,10 +404,11 @@ fn viewport(ui: &mut Ui, s: &AppState) -> Node {
     root.push(toolbar);
     if s.settings.view_cube {
         root.push(
-            Node::custom(move |p, r| viewcube::paint(p, r, yaw, pitch, hover, &theme))
+            Node::custom(move |p, r| viewcube::paint(p, r, yaw, pitch, hover, active, &theme))
                 .id(cube_id)
-                .cursor(if hover.is_some() { Cursor::Pointer } else { Cursor::Default })
-                .size(Size::Px(104.0), Size::Px(104.0))
+                .cursor(if hover.is_some() { Cursor::Pointer } else { Cursor::Grab })
+                .tooltip(hover.map(viewcube::name).unwrap_or_else(|| "Orienter la vue".into()))
+                .size(Size::Px(124.0), Size::Px(124.0))
                 .anchor(Anchor { top: Some(12.0), right: Some(12.0), ..Default::default() }),
         );
     }
@@ -409,9 +421,9 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
         .align(Align::Stretch)
-        .child(parts_panel(ui, s))
+        .children(s.left_open.then(|| parts_panel(ui, s)))
         .child(viewport(ui, s))
-        .child(properties_panel(ui, s));
+        .children(s.right_open.then(|| properties_panel(ui, s)));
     let root = Node::column().fill().child(topbar(ui, s)).child(body);
     settings_ui::dialog(ui, s);
     convert_ui::dialog(ui, s);
@@ -426,6 +438,17 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     }
     if ui.clicked(Id::new("réglages")) {
         s.settings_open = true;
+    }
+    if ui.clicked(Id::new("panneau gauche")) || (ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('['))) {
+        s.left_open = !s.left_open;
+    }
+    if ui.clicked(Id::new("panneau droit")) || (ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char(']'))) {
+        s.right_open = !s.right_open;
+    }
+    if ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('\\')) {
+        let open = !(s.left_open || s.right_open);
+        s.left_open = open;
+        s.right_open = open;
     }
     if ui.clicked(Id::new("convertir")) {
         s.convert.open = true;

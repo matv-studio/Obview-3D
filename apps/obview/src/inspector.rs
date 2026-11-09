@@ -34,40 +34,12 @@ fn normal() -> Vec2 {
     vec2(t.cos(), t.sin())
 }
 
-/// Étendue des bandes le long de la normale, en pixels logiques : celle des coins projetés de la boîte englobante
-/// du modèle, resserrée de 6 % de chaque côté, pour que chaque rendu montre une partie du modèle quelle que soit
-/// sa forme ; à défaut (modèle absent ou derrière l'œil), la vue.
-pub fn span(view: Rect, s: &AppState) -> (f32, f32) {
+/// Étendue des bandes le long de la normale, en pixels logiques : toute la largeur de la vue, mesurée à mi-hauteur.
+/// Les bandes sont donc de largeur égale sur tout le canevas, quel que soit le modèle (D-15).
+pub fn span(view: Rect, _s: &AppState) -> (f32, f32) {
     let n = normal();
     let yc = view.center().y;
-    let whole = (view.min.x * n.x + yc * n.y, view.max.x * n.x + yc * n.y);
-    let Some((lo, hi)) = s.scene_bounds else { return whole };
-    let cam = &s.camera;
-    let (right, up, back) = crate::navigation::basis(cam.yaw, cam.pitch);
-    let eye = cam.eye();
-    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let half_h = (cam.fov_y * 0.5).tan();
-    let (mut umin, mut umax) = (f32::MAX, f32::MIN);
-    for k in 0..8 {
-        let c = [
-            if k & 1 == 0 { lo[0] } else { hi[0] } as f64,
-            if k & 2 == 0 { lo[1] } else { hi[1] } as f64,
-            if k & 4 == 0 { lo[2] } else { hi[2] } as f64,
-        ];
-        let rel = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
-        let depth = -dot(rel, back);
-        if depth <= cam.near() {
-            return whole;
-        }
-        let px_per_unit = view.height() as f64 * 0.5 / (depth * half_h);
-        let x = view.center().x as f64 + dot(rel, right) * px_per_unit;
-        let y = view.center().y as f64 - dot(rel, up) * px_per_unit;
-        let u = x as f32 * n.x + y as f32 * n.y;
-        umin = umin.min(u);
-        umax = umax.max(u);
-    }
-    let shrink = (umax - umin) * 0.06;
-    if umax - umin < 48.0 { whole } else { (umin + shrink, umax - shrink) }
+    (view.min.x * n.x + yc * n.y, view.max.x * n.x + yc * n.y)
 }
 
 /// Limites des bandes le long de la normale : N + 1 valeurs, infinies aux extrémités.
