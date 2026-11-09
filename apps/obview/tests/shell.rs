@@ -236,7 +236,7 @@ fn conversion_deux_themes() {
     let model = demo::bracket();
     let idle = Shot {
         setup: |s| s.convert.open = true,
-        hover: Some(Id::new("convertir").with("préréglage").with(2)),
+        hover: Some(Id::new("convertir").with("densité")),
         ..Default::default()
     };
     shoot(&gpu, &model, &both(idle, "conversion_sombre", "conversion_claire"));

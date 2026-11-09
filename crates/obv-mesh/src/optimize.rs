@@ -5,7 +5,7 @@
 //! mesuré dans les deux sens (Hausdorff, sommets et centres des triangles) et la simplification est reprise avec
 //! une cible plus serrée tant qu'il dépasse la tolérance.
 
-use meshopt::{SimplifyOptions, VertexDataAdapter};
+use meshopt::{SimplifyOptions, SimplifyVertex, VertexDataAdapter};
 use obv_io::Mesh;
 use rayon::prelude::*;
 
@@ -80,7 +80,32 @@ fn snap_positions(positions: &mut [[f32; 3]], eps: f32) {
     }
 }
 
+/// Réglages de la simplification.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SimplifyParams {
+    /// Écart maximal accepté (unités du maillage), 0 pour ne rien simplifier.
+    pub tolerance: f32,
+    /// Silhouette : sommets des arêtes vives prioritaires (contours et arrondis d'arêtes plus fidèles). Figer les
+    /// bords libres a été essayé et écarté : les exports CAO en ont beaucoup, la réduction s'effondrait.
+    pub keep_silhouette: bool,
+}
+
+/// Stratégies essayées ; le résultat accepté le plus léger l'emporte.
+#[derive(Clone, Copy, Debug)]
+enum Strategy {
+    /// Contraction vers un sommet existant (la surface d'origine est échantillonnée telle quelle).
+    Collapse(SimplifyOptions),
+    /// Contraction avec placement optimal du sommet (quadriques) : bien meilleur sur les surfaces courbes, où la
+    /// corde d'une contraction simple creuse la forme.
+    Update(SimplifyOptions),
+}
+
 pub fn optimize_mesh(mesh: &Mesh, tolerance: f32) -> (Mesh, MeshReport) {
+    optimize_mesh_with(mesh, SimplifyParams { tolerance, keep_silhouette: true })
+}
+
+pub fn optimize_mesh_with(mesh: &Mesh, params: SimplifyParams) -> (Mesh, MeshReport) {
+    let tolerance = params.tolerance;
     let triangles_in = mesh.triangle_count();
     let mut positions = mesh.positions.clone();
     if let Some((lo, hi)) = mesh.bounds() {
@@ -95,39 +120,94 @@ pub fn optimize_mesh(mesh: &Mesh, tolerance: f32) -> (Mesh, MeshReport) {
 
     let mut deviation = 0.0;
     if tolerance > 0.0 && !indices.is_empty() {
-        let bytes: &[u8] = unsafe {
-            // SAFETY: `Vertex` est `repr(C)` sans octets de remplissage (six f32).
-            std::slice::from_raw_parts(verts.as_ptr().cast(), verts.len() * std::mem::size_of::<Vertex>())
-        };
-        let adapter = VertexDataAdapter::new(bytes, std::mem::size_of::<Vertex>(), 0).expect("sommets");
-        let normals: Vec<f32> = verts.iter().flat_map(|v| v.n).collect();
+        // Sommets des arêtes vives : une même position porte plusieurs normales.
+        let mut flags = vec![SimplifyVertex::None; verts.len()];
+        if params.keep_silhouette {
+            let mut seen: std::collections::HashMap<[u32; 3], (u32, bool)> = std::collections::HashMap::new();
+            for (i, v) in verts.iter().enumerate() {
+                let e = seen.entry(v.p.map(f32::to_bits)).or_insert((i as u32, false));
+                if e.0 != i as u32 {
+                    e.1 = true;
+                }
+            }
+            for (i, v) in verts.iter().enumerate() {
+                if seen[&v.p.map(f32::to_bits)].1 {
+                    flags[i] = SimplifyVertex::Priority;
+                }
+            }
+        }
         // Poids des normales, à l'échelle de la tolérance (erreur absolue) : un écart de normale d'environ 60° pèse
         // une demi-tolérance. Assez pour éviter les plis, sans freiner la réduction des surfaces lisses.
         let weights = [tolerance * 0.5; 3];
-        let locks = vec![false; verts.len()];
-        // Recherche de la cible : l'erreur estimée par l'algorithme (quadriques aux sommets) sous-estime l'écart
-        // réel, surtout sur les surfaces courbes où restent des triangles allongés. Correction proportionnelle
-        // tant qu'aucune borne n'est connue, puis dichotomie. Deux réglages sont essayés (triangles libres, et
-        // triangles régularisés, meilleurs sur les surfaces courbes) ; le résultat accepté le plus léger l'emporte.
         let original =
             Mesh { positions: verts.iter().map(|v| v.p).collect(), normals: Vec::new(), indices: indices.clone() };
-        let search = |options: SimplifyOptions| -> Option<(Vec<u32>, f32)> {
+
+        // Un essai : indices et sommets résultants.
+        let attempt = |strategy: Strategy, target: f32| -> (Vec<u32>, Vec<Vertex>) {
+            match strategy {
+                Strategy::Collapse(options) => {
+                    let bytes: &[u8] = unsafe {
+                        // SAFETY: `Vertex` est `repr(C)` sans octets de remplissage (six f32).
+                        std::slice::from_raw_parts(verts.as_ptr().cast(), verts.len() * std::mem::size_of::<Vertex>())
+                    };
+                    let adapter = VertexDataAdapter::new(bytes, std::mem::size_of::<Vertex>(), 0).expect("sommets");
+                    let normals: Vec<f32> = verts.iter().flat_map(|v| v.n).collect();
+                    let r = meshopt::simplify_with_attributes_and_locks(
+                        &indices, &adapter, &normals, &weights, 12, &flags, 0, target, options, None,
+                    );
+                    (r, verts.clone())
+                }
+                Strategy::Update(options) => {
+                    let mut idx = indices.clone();
+                    let mut pos: Vec<[f32; 3]> = verts.iter().map(|v| v.p).collect();
+                    let mut nrm: Vec<f32> = verts.iter().flat_map(|v| v.n).collect();
+                    let n = meshopt::simplify_with_update(
+                        &mut idx,
+                        &mut pos,
+                        &mut nrm,
+                        &weights,
+                        12,
+                        Some(&flags),
+                        0,
+                        target,
+                        options,
+                        None,
+                    );
+                    idx.truncate(n);
+                    let out = pos
+                        .iter()
+                        .zip(nrm.chunks_exact(3))
+                        .map(|(p, n)| {
+                            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-20);
+                            Vertex { p: *p, n: [n[0] / l, n[1] / l, n[2] / l] }
+                        })
+                        .collect();
+                    (idx, out)
+                }
+            }
+        };
+
+        // Recherche de la cible : l'erreur estimée par l'algorithme (quadriques) sous-estime l'écart réel, surtout
+        // sur les surfaces courbes. Correction proportionnelle tant qu'aucune borne n'est connue, puis
+        // dichotomie ; l'écart de Hausdorff mesuré décide.
+        let search = |strategy: Strategy| -> Option<(Vec<u32>, Vec<Vertex>, f32)> {
             let mut target = tolerance;
             let (mut lo, mut hi): (f32, Option<f32>) = (0.0, None);
-            let mut best: Option<(Vec<u32>, f32)> = None;
+            let mut best: Option<(Vec<u32>, Vec<Vertex>, f32)> = None;
             for _ in 0..8 {
-                let candidate = meshopt::simplify_with_attributes_and_locks(
-                    &indices, &adapter, &normals, &weights, 12, &locks, 0, target, options, None,
-                );
-                let simplified =
-                    Mesh { positions: original.positions.clone(), normals: Vec::new(), indices: candidate.clone() };
+                let (cand, cand_verts) = attempt(strategy, target);
+                let simplified = Mesh {
+                    positions: cand_verts.iter().map(|v| v.p).collect(),
+                    normals: Vec::new(),
+                    indices: cand.clone(),
+                };
                 let d = hausdorff(&original, &simplified);
                 if std::env::var_os("OBV_DEBUG_SIMPLIFY").is_some() {
-                    eprintln!("{options:?} cible {target:.6} : {} triangles, écart {d:.6}", candidate.len() / 3);
+                    eprintln!("{strategy:?} cible {target:.6} : {} triangles, écart {d:.6}", cand.len() / 3);
                 }
                 if d <= tolerance {
-                    if best.as_ref().is_none_or(|(b, _)| candidate.len() < b.len()) {
-                        best = Some((candidate, d));
+                    if best.as_ref().is_none_or(|(b, _, _)| cand.len() < b.len()) {
+                        best = Some((cand, cand_verts, d));
                     }
                     lo = target;
                     if d > tolerance * 0.85 {
@@ -145,13 +225,16 @@ pub fn optimize_mesh(mesh: &Mesh, tolerance: f32) -> (Mesh, MeshReport) {
             best
         };
         let base = SimplifyOptions::ErrorAbsolute | SimplifyOptions::PreserveFolds;
-        let (a, b) = rayon::join(|| search(base), || search(base | SimplifyOptions::RegularizeLight));
-        let best = match (a, b) {
-            (Some(a), Some(b)) => Some(if b.0.len() < a.0.len() { b } else { a }),
-            (a, b) => a.or(b),
-        };
-        if let Some((s, d)) = best {
+        let strategies = [
+            Strategy::Update(base),
+            Strategy::Update(base | SimplifyOptions::RegularizeLight),
+            Strategy::Collapse(base),
+            Strategy::Collapse(base | SimplifyOptions::RegularizeLight),
+        ];
+        let best = strategies.par_iter().filter_map(|s| search(*s)).min_by_key(|(idx, _, _)| idx.len());
+        if let Some((s, v, d)) = best {
             indices = s;
+            verts = v;
             deviation = d;
         }
     }

@@ -51,7 +51,11 @@ fn convert(args: &[String]) -> Result<(), String> {
     let t = std::time::Instant::now();
     let model = obv_io::read(std::path::Path::new(input)).map_err(|e| e.to_string())?;
     let t_read = t.elapsed();
-    let opts = obv_mesh::ConvertOptions { format, tolerance_m: tol_mm / 1000.0 };
+    let opts = obv_mesh::ConvertOptions {
+        format,
+        tolerance_m: tol_mm / 1000.0,
+        keep_silhouette: !args.iter().any(|a| a == "--sans-silhouette"),
+    };
     let r = obv_mesh::convert(&model, out, opts, &|_| {}).map_err(|e| e.to_string())?;
     println!(
         "{} → {} triangles ({:.1} %), écart mesuré {:.4} mm, {:.1} Mo ; lecture {:.2} s, conversion {:.2} s",

@@ -10,14 +10,6 @@ use obv_ui::{
 
 use crate::shell::{AppState, compact, group};
 
-/// Écarts proposés, en millimètres.
-pub const PRESETS: [(f64, &str, &str); 4] = [
-    (0.0, "Exact", "Géométrie gardée : soudure et réordonnancement seulement"),
-    (0.005, "Fin", "Écart maximal 0,005 mm"),
-    (0.02, "Standard", "Écart maximal 0,02 mm"),
-    (0.1, "Léger", "Écart maximal 0,1 mm"),
-];
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
     Idle,
@@ -30,9 +22,14 @@ pub enum Status {
 pub struct ConvertState {
     pub open: bool,
     pub format: Format,
-    /// Écart maximal en millimètres.
+    /// Curseur fidélité (0, géométrie exacte) ↔ performance (1).
+    pub density: f64,
+    /// Écart maximal en millimètres (déduit du curseur, ou saisi).
     pub tolerance_mm: f64,
     pub tolerance_text: String,
+    pub keep_silhouette: bool,
+    /// L'écart a été initialisé pour le modèle ouvert.
+    pub initialized: bool,
     pub status: Status,
 }
 
@@ -41,8 +38,11 @@ impl Default for ConvertState {
         ConvertState {
             open: false,
             format: Format::Glb,
-            tolerance_mm: 0.02,
-            tolerance_text: "0,02".into(),
+            density: obv_mesh::DEFAULT_DENSITY,
+            tolerance_mm: 0.0,
+            tolerance_text: String::new(),
+            keep_silhouette: true,
+            initialized: false,
             status: Status::Idle,
         }
     }
@@ -65,9 +65,22 @@ fn id(n: &str) -> Id {
     Id::new("convertir").with(n)
 }
 
+/// Millimètres avec trois chiffres significatifs, virgule décimale.
 fn fmt_mm(v: f64) -> String {
-    let s = format!("{v}");
+    if v <= 0.0 {
+        return "0".into();
+    }
+    let digits = (2 - v.log10().floor() as i32).clamp(0, 6) as usize;
+    let s = format!("{v:.digits$}");
+    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
     s.replace('.', ",")
+}
+
+/// Diagonale du modèle en millimètres.
+fn diag_mm(s: &AppState) -> f64 {
+    s.scene_bounds
+        .map(|(lo, hi)| (0..3).map(|i| ((hi[i] - lo[i]) as f64).powi(2)).sum::<f64>().sqrt() * s.unit_m * 1000.0)
+        .unwrap_or(0.0)
 }
 
 /// Taille lisible : « 25 Ko », « 4,9 Mo ».
@@ -121,22 +134,37 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
     body.push(row(ui, "Format", tabs_fmt));
     body.push(widgets::divider(ui));
 
-    // Écart : préréglages et valeur libre.
-    let pre_base = id("préréglage");
-    for (i, (v, _, _)) in PRESETS.iter().enumerate() {
-        if !running && ui.clicked(pre_base.with(i)) {
-            s.convert.tolerance_mm = *v;
-            s.convert.tolerance_text = fmt_mm(*v);
-            s.convert.status = Status::Idle;
-        }
+    // Fidélité ↔ performance : curseur, écart en millimètres (lié au curseur), silhouette.
+    let diag = diag_mm(s);
+    if !s.convert.initialized {
+        s.convert.tolerance_mm = obv_mesh::ConvertOptions::tolerance_for_density(s.convert.density, diag);
+        s.convert.tolerance_text = fmt_mm(s.convert.tolerance_mm);
+        s.convert.initialized = true;
     }
-    let current = PRESETS.iter().position(|(v, _, _)| (*v - s.convert.tolerance_mm).abs() < 1e-12);
-    let labels: Vec<&str> = PRESETS.iter().map(|p| p.1).collect();
-    let mut tabs = widgets::tabs(ui, pre_base, &labels, current.unwrap_or(usize::MAX)).width(Size::Px(320.0));
-    for (i, child) in tabs.children.iter_mut().enumerate() {
-        child.tooltip = Some(obv_ui::Tooltip { text: PRESETS[i].2.into(), shortcut: None });
+    let (slider, moved) = controls::slider(ui, id("densité"), s.convert.density as f32, 0.0, 1.0, 0.0, 240.0);
+    if let Some(v) = moved
+        && !running
+    {
+        s.convert.density = v as f64;
+        s.convert.tolerance_mm = obv_mesh::ConvertOptions::tolerance_for_density(v as f64, diag);
+        s.convert.tolerance_text = fmt_mm(s.convert.tolerance_mm);
+        s.convert.status = Status::Idle;
     }
-    body.push(row(ui, "Précision", tabs));
+    let small = TextStyle::new(11.5, Weight::Medium);
+    let density_ctl = Node::row()
+        .gap(10.0)
+        .child(
+            Node::text("Fidélité", small, c.text_secondary)
+                .id(id("fidélité"))
+                .tooltip("Forme exacte, fichier plus lourd"),
+        )
+        .child(slider.tooltip("Gauche : la forme d'abord. Droite : le moins de triangles possible"))
+        .child(
+            Node::text("Performance", small, c.text_secondary)
+                .id(id("performance"))
+                .tooltip("Fichier léger, forme approchée"),
+        );
+    body.push(row(ui, "Densité", density_ctl));
     let (input, changed) = controls::text_input(
         ui,
         TextInput {
@@ -155,16 +183,28 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         && v.is_finite()
     {
         s.convert.tolerance_mm = v;
+        s.convert.density = obv_mesh::ConvertOptions::density_for_tolerance(v, diag);
         s.convert.status = Status::Idle;
     }
     body.push(row(
         ui,
         "Écart maximal",
-        Node::row().gap(8.0).child(input).child(Node::text(
-            "mm",
-            TextStyle::new(13.0, Weight::Regular),
-            c.text_secondary,
-        )),
+        Node::row()
+            .gap(8.0)
+            .child(input.tooltip("Distance maximale garantie entre la forme d'origine et le résultat"))
+            .child(Node::text("mm", TextStyle::new(13.0, Weight::Regular), c.text_secondary)),
+    ));
+    let (sil, toggled) = controls::toggle(ui, id("silhouette"), s.convert.keep_silhouette);
+    if let Some(v) = toggled
+        && !running
+    {
+        s.convert.keep_silhouette = v;
+        s.convert.status = Status::Idle;
+    }
+    body.push(row(
+        ui,
+        "Silhouette",
+        sil.tooltip("Arêtes vives et contours plus fidèles, au prix de quelques triangles"),
     ));
     body.push(widgets::divider(ui));
     body.push(Node::new().height(Size::Px(14.0)));
@@ -180,7 +220,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                     .gap(10.0)
                     .child(stat(ui, "Triangles", compact(*triangles_out), true))
                     .child(stat(ui, "Réduction", format!("{:.0} %", 100.0 - ratio).replace('.', ","), false))
-                    .child(stat(ui, "Écart mesuré", format!("{deviation_mm:.4} mm").replace('.', ","), false))
+                    .child(stat(ui, "Écart mesuré", format!("{} mm", fmt_mm(*deviation_mm)), false))
                     .child(stat(ui, "Taille", file_size(*bytes), false)),
             );
         }
@@ -207,7 +247,16 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                     .gap(10.0)
                     .child(stat(ui, "Pièces", group(s.parts.len()), false))
                     .child(stat(ui, "Triangles", compact(tri_in), false))
-                    .child(stat(ui, "Écart garanti", format!("{} mm", fmt_mm(s.convert.tolerance_mm)), true)),
+                    .child(stat(
+                        ui,
+                        "Écart garanti",
+                        if s.convert.tolerance_mm > 0.0 {
+                            format!("{} mm", fmt_mm(s.convert.tolerance_mm))
+                        } else {
+                            "Exact".into()
+                        },
+                        true,
+                    )),
             );
         }
     }
@@ -279,7 +328,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         footer.push(b);
     }
     let body = Node::column().align(Align::Stretch).child(body);
-    let (node, close) = controls::modal(ui, Id::new("convertir"), "Convertir", (620.0, 396.0), body, footer);
+    let (node, close) = controls::modal(ui, Id::new("convertir"), "Convertir", (640.0, 430.0), body, footer);
     if close && !running {
         s.convert.open = false;
     }

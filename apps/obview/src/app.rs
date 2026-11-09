@@ -206,6 +206,7 @@ impl App {
                     let opts = obv_mesh::ConvertOptions {
                         format: self.state.convert.format,
                         tolerance_m: self.state.convert.tolerance_mm / 1000.0,
+                        keep_silhouette: self.state.convert.keep_silhouette,
                     };
                     let stem = std::path::Path::new(&self.state.file_name)
                         .file_stem()

@@ -168,3 +168,20 @@ vue (mesurée à mi-hauteur), quel que soit le modèle ; cube de vue et trièdre
 cube semi-transparent traversé par les axes, boules lettrées côté positif et cerclées côté négatif, disque au
 survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser pour tourner.
 
+## D-22 · Simplification des formes arrondies, réglage fidélité ↔ performance (09/11/2026)
+- Cause relevée : la contraction vers un sommet existant (meshoptimizer `simplify`) ne peut que tendre des
+  cordes sous la surface ; sur une sphère, l'écart réel vaut environ deux fois l'erreur estimée et la
+  réduction plafonne (≈ 9 000 triangles pour 0,002 sur une sphère unité).
+- Ajout : contraction avec placement optimal du sommet (`meshopt_simplifyWithUpdate`, quadriques, positions et
+  normales mises à jour). Quatre stratégies sont lancées en parallèle (placement optimal ou sommet existant,
+  triangles libres ou régularisés), chacune avec la recherche de cible guidée par l'écart de Hausdorff
+  mesuré ; la plus légère qui tient la tolérance l'emporte. Sphère : ≈ 5 200 triangles pour le même écart.
+- Silhouette (réglage, actif par défaut) : sommets des arêtes vives (une position, plusieurs normales) marqués
+  prioritaires. Figer les bords libres a été mesuré puis écarté (exports CAO très ouverts : réduction
+  effondrée). Montre, 0,02 mm : 49,6 % des triangles avec silhouette, 35,4 % sans.
+- Réglage « Densité » (curseur Fidélité ↔ Performance) : écart = diagonale × 10^(−4,5 + 2,5·t), t ∈ ]0, 1],
+  t = 0 : géométrie exacte ; par défaut t = 0,45 (≈ 4·10⁻⁴ de la diagonale). L'écart en millimètres reste
+  saisissable et déplace le curseur.
+- En suspens : écart encore à ≈ 2× l'optimum théorique sur les surfaces courbes ; piste : ajustement final
+  des sommets vers la surface d'origine (moindres carrés sur les échantillons), ou remaillage isotrope.
+
