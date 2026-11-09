@@ -16,7 +16,7 @@ use crate::{
     gizmo,
     inspector::{self, Inspector},
     settings::{GizmoStyle, PANEL_MAX, PANEL_MIN, Settings, ThemeChoice, ToolButton, Units},
-    settings_ui,
+    settings_ui, tools, views,
 };
 
 /// Hauteur d'une ligne de l'arbre (liste virtuelle : hauteur fixe).
@@ -42,6 +42,8 @@ pub struct PartInfo {
     pub color: [u8; 4],
     /// Matériau du fichier (aucun : couleur par défaut de la visionneuse).
     pub material: Option<String>,
+    /// Centre de la boîte englobante (vue éclatée).
+    pub center: [f32; 3],
 }
 
 pub struct AppState {
@@ -82,6 +84,16 @@ pub struct AppState {
     pub stage: Rc<Cell<Rect>>,
     /// Poignée de panneau tenue : côté, abscisse de l'appui, déjà glissée.
     pub grip_press: Option<(u8, f32, bool)>,
+    /// Outils de la vue (D-26).
+    pub measure: tools::MeasureState,
+    pub section: tools::SectionState,
+    /// Vue éclatée : 0 (assemblé) à 1.
+    pub explode: f32,
+    pub capture: tools::CaptureState,
+    /// Vues enregistrées du fichier ouvert.
+    pub views: views::ViewsState,
+    /// Caméra demandée par l'interface (vues standard ou enregistrées), animée par la fenêtre.
+    pub camera_request: Option<Camera>,
 }
 
 impl AppState {
@@ -98,8 +110,9 @@ impl AppState {
                     .find_map(|g| g.material)
                     .and_then(|m| model.materials.get(m as usize))
                     .map(|m| if m.name.is_empty() { "Sans nom".to_owned() } else { m.name.clone() });
-                let size =
-                    p.mesh.bounds().map(|(lo, hi)| [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]).unwrap_or([0.0; 3]);
+                let b = p.mesh.bounds();
+                let size = b.map(|(lo, hi)| [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]).unwrap_or([0.0; 3]);
+                let center = b.map(|(lo, hi)| std::array::from_fn(|k| (lo[k] + hi[k]) * 0.5)).unwrap_or([0.0; 3]);
                 PartInfo {
                     name: p.name.clone(),
                     triangles: p.mesh.triangle_count(),
@@ -108,6 +121,7 @@ impl AppState {
                     visible: true,
                     color: model.display_color(i).unwrap_or(crate::frame::STEEL),
                     material,
+                    center,
                 }
             })
             .collect();
@@ -137,6 +151,12 @@ impl AppState {
             viewport: Rc::new(Cell::new(Rect::ZERO)),
             stage: Rc::new(Cell::new(Rect::ZERO)),
             grip_press: None,
+            measure: tools::MeasureState::default(),
+            section: tools::SectionState::default(),
+            explode: 0.0,
+            capture: tools::CaptureState::default(),
+            views: views::ViewsState::default(),
+            camera_request: None,
         }
     }
 
@@ -262,6 +282,16 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
 
 fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
     let c = ui.theme.color.clone();
+    if s.left_tab == 1 {
+        let tabs = widgets::tabs(ui, Id::new("onglets"), &["Pièces", "Vues"], s.left_tab);
+        let header = Node::column().padding(Edges { left: 8.0, right: 8.0, top: 10.0, bottom: 6.0 }).child(tabs);
+        let body = Node::scroll(Id::new("vues défilement"))
+            .width(Size::Fill(1.0))
+            .height(Size::Fill(1.0))
+            .padding(Edges::xy(6.0, 4.0))
+            .children(views::tab(ui, s));
+        return widgets::panel(ui, s.settings.left_width).child(header).child(body);
+    }
     let scroll_id = Id::new("arbre");
     let filtered = s.filtered();
     let count = 1 + if s.root_open { filtered.len() } else { 0 };
@@ -409,7 +439,7 @@ pub fn tool_button_id(b: ToolButton) -> Id {
 }
 
 /// Barre du bas : boutons choisis dans les réglages, séparateur entre deux groupes (D-25).
-fn toolbar(ui: &mut Ui, s: &AppState) -> Option<Node> {
+fn toolbar(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
     let mut items = Vec::new();
     let mut last_group = None;
     for b in ToolButton::ALL {
@@ -426,10 +456,12 @@ fn toolbar(ui: &mut Ui, s: &AppState) -> Option<Node> {
             ToolButton::Section => s.tool == Tool::Section,
             ToolButton::Explode => s.tool == Tool::Explode,
             ToolButton::Render => s.inspector != Inspector::Off,
+            ToolButton::Projection => s.camera.ortho,
             _ => false,
         };
         items.push(widgets::icon_button(ui, tool_button_id(b), b.icon(), b.label(), b.shortcut(), active));
     }
+    tools::capture_popup(ui, s, None);
     (!items.is_empty()).then(|| widgets::docked_toolbar(ui, items))
 }
 
@@ -483,11 +515,17 @@ pub fn grip_id(side: u8) -> Id {
     Id::new("poignée").with(side)
 }
 
-fn viewport(ui: &mut Ui, s: &AppState) -> Node {
+fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
     let rect_cell = s.viewport.clone();
     let mut root = Node::stack().fill().child(Node::custom(move |_, r| rect_cell.set(r)).fill());
     if let Some(layer) = inspector::overlay(ui, s) {
         root.push(layer);
+    }
+    if let Some(layer) = tools::overlay(ui, s) {
+        root.push(layer);
+    }
+    if let Some(p) = tools::tool_panel(ui, s) {
+        root.push(p);
     }
     let style = s.settings.gizmo;
     if style != GizmoStyle::None {
@@ -654,6 +692,15 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
             Inspector::Single(_) => Inspector::Bands,
             _ => Inspector::Off,
         };
+    }
+    tools::handle(ui, s);
+    if ui.clicked(Id::new("projection")) || (plain && ui.input.keys.contains(&Key::Char('p'))) {
+        s.camera.ortho = !s.camera.ortho;
+    }
+    if plain && ui.input.keys.contains(&Key::Escape) && s.measure.pending.is_some() {
+        s.measure.pending = None;
+    } else if plain && ui.escape_pressed() && s.tool != Tool::Select && s.inspector == Inspector::Off {
+        s.tool = Tool::Select;
     }
     if plain {
         for (k, t) in [('v', Tool::Select), ('m', Tool::Measure), ('c', Tool::Section), ('e', Tool::Explode)] {

@@ -44,7 +44,9 @@ impl Band {
     }
 }
 
-/// Caméra en orbite autour d'une cible, profondeur inversée à plan lointain infini.
+/// Caméra en orbite autour d'une cible. Perspective : profondeur inversée à plan lointain infini.
+/// Orthographique : même taille visible au plan de la cible (demi-hauteur = distance × tan(fov/2)), profondeur
+/// inversée linéaire sur la scène entière.
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {
     pub target: [f64; 3],
@@ -54,11 +56,23 @@ pub struct Camera {
     /// Inclinaison (radians, positive : vue du dessus).
     pub pitch: f64,
     pub fov_y: f64,
+    /// Projection orthographique.
+    pub ortho: bool,
+    /// Rayon de la scène (bornes de profondeur de la projection orthographique).
+    pub radius: f64,
 }
 
 impl Default for Camera {
     fn default() -> Self {
-        Camera { target: [0.0; 3], distance: 5.0, yaw: 0.6, pitch: 0.45, fov_y: 35f64.to_radians() }
+        Camera {
+            target: [0.0; 3],
+            distance: 5.0,
+            yaw: 0.6,
+            pitch: 0.45,
+            fov_y: 35f64.to_radians(),
+            ortho: false,
+            radius: 1.0,
+        }
     }
 }
 
@@ -77,6 +91,13 @@ impl Camera {
         let half_h = (half_v.tan() * aspect.max(1e-3)).atan();
         self.target = c;
         self.distance = r / half_v.min(half_h).sin() * 1.05;
+        self.radius = r.max(1e-9);
+    }
+
+    /// Direction de visée (de l'œil vers la cible), unitaire.
+    pub fn forward(&self) -> [f64; 3] {
+        let (cy, sy, cp, sp) = (self.yaw.cos(), self.yaw.sin(), self.pitch.cos(), self.pitch.sin());
+        [-cp * sy, -sp, -cp * cy]
     }
 
     /// Plan proche de la projection (profondeur inversée : profondeur = proche / distance de vue).
@@ -92,6 +113,11 @@ impl Camera {
     /// Comme [`Self::view_proj`], restreinte à une région de l'écran : `center` en coordonnées normalisées
     /// (-1 à 1, Y vers le haut), `scale` agrandissement (taille de la vue / taille de la région).
     pub fn view_proj_region(&self, aspect: f64, center: [f64; 2], scale: [f64; 2]) -> [f32; 16] {
+        self.matrix(aspect, center, scale).map(|v| v as f32)
+    }
+
+    /// Matrice vue × projection en double précision (colonnes).
+    pub fn matrix(&self, aspect: f64, center: [f64; 2], scale: [f64; 2]) -> [f64; 16] {
         let eye = self.eye();
         let t = self.target;
         let f = norm([t[0] - eye[0], t[1] - eye[1], t[2] - eye[2]]);
@@ -115,22 +141,105 @@ impl Camera {
             dot(f, eye),
             1.0,
         ];
-        let near = self.near();
-        let g = 1.0 / (self.fov_y * 0.5).tan();
-        let mut proj = [g / aspect, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, near, 0.0];
-        // Région : x' = s (x - c w), appliqué aux lignes x et y de la projection (w = -z_vue).
+        let mut proj = if self.ortho {
+            // Profondeur inversée linéaire : z de vue de `back` (derrière l'œil) à `-far` → 1 à 0.
+            let h = self.distance * (self.fov_y * 0.5).tan();
+            let back = 2.0 * self.radius;
+            let far = self.distance + 2.0 * self.radius;
+            let k = 1.0 / (back + far);
+            [1.0 / (h * aspect), 0.0, 0.0, 0.0, 0.0, 1.0 / h, 0.0, 0.0, 0.0, 0.0, k, 0.0, 0.0, 0.0, far * k, 1.0]
+        } else {
+            let near = self.near();
+            let g = 1.0 / (self.fov_y * 0.5).tan();
+            [g / aspect, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, near, 0.0]
+        };
+        // Région : x' = s (x - c w), appliqué aux lignes x et y de la projection.
         for c in 0..4 {
             proj[c * 4] = scale[0] * (proj[c * 4] - center[0] * proj[c * 4 + 3]);
             proj[c * 4 + 1] = scale[1] * (proj[c * 4 + 1] - center[1] * proj[c * 4 + 3]);
         }
-        let mut r = [0f32; 16];
+        let mut r = [0f64; 16];
         for c in 0..4 {
             for row in 0..4 {
-                r[c * 4 + row] = (0..4).map(|k| proj[k * 4 + row] * view[c * 4 + k]).sum::<f64>() as f32;
+                r[c * 4 + row] = (0..4).map(|k| proj[k * 4 + row] * view[c * 4 + k]).sum::<f64>();
             }
         }
         r
     }
+
+    /// Point du monde sous les coordonnées normalisées `ndc` (x, y de -1 à 1, profondeur de la cible).
+    pub fn unproject(&self, aspect: f64, ndc: [f64; 3]) -> Option<[f64; 3]> {
+        let inv = invert(&self.matrix(aspect, [0.0, 0.0], [1.0, 1.0]))?;
+        let v = [ndc[0], ndc[1], ndc[2], 1.0];
+        let mut o = [0f64; 4];
+        for (row, out) in o.iter_mut().enumerate() {
+            *out = (0..4).map(|k| inv[k * 4 + row] * v[k]).sum();
+        }
+        (o[3].abs() > 1e-300).then(|| [o[0] / o[3], o[1] / o[3], o[2] / o[3]])
+    }
+
+    /// Projette un point du monde : coordonnées normalisées (x, y) et vrai s'il est devant l'œil.
+    pub fn project(&self, aspect: f64, p: [f64; 3]) -> ([f64; 2], bool) {
+        let m = self.matrix(aspect, [0.0, 0.0], [1.0, 1.0]);
+        let c: [f64; 4] = std::array::from_fn(|row| (0..3).map(|k| m[k * 4 + row] * p[k]).sum::<f64>() + m[12 + row]);
+        let w = if c[3].abs() < 1e-300 { 1e-300 } else { c[3] };
+        ([c[0] / w, c[1] / w], c[3] > 0.0)
+    }
+}
+
+/// Inverse d'une matrice 4 × 4 (colonnes), par cofacteurs.
+fn invert(m: &[f64; 16]) -> Option<[f64; 16]> {
+    let mut inv = [0f64; 16];
+    inv[0] =
+        m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11]
+            - m[13] * m[7] * m[10];
+    inv[4] =
+        -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11]
+            + m[12] * m[7] * m[10];
+    inv[8] =
+        m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11]
+            - m[12] * m[7] * m[9];
+    inv[12] =
+        -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10]
+            + m[12] * m[6] * m[9];
+    inv[1] =
+        -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11]
+            + m[13] * m[3] * m[10];
+    inv[5] =
+        m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11]
+            - m[12] * m[3] * m[10];
+    inv[9] =
+        -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11]
+            + m[12] * m[3] * m[9];
+    inv[13] =
+        m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10]
+            - m[12] * m[2] * m[9];
+    inv[2] =
+        m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7]
+            - m[13] * m[3] * m[6];
+    inv[6] =
+        -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7]
+            + m[12] * m[3] * m[6];
+    inv[10] =
+        m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7]
+            - m[12] * m[3] * m[5];
+    inv[14] =
+        -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6]
+            + m[12] * m[2] * m[5];
+    inv[3] =
+        -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7]
+            + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7]
+        - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7]
+        + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6]
+        - m[8] * m[2] * m[5];
+    let det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if det.abs() < 1e-300 {
+        return None;
+    }
+    Some(inv.map(|v| v / det))
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -148,12 +257,13 @@ fn norm(a: [f64; 3]) -> [f64; 3] {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Push {
     view_proj: [f32; 16],
-    eye: [f32; 3],
-    mode: u32,
     positions: u64,
     normals: u64,
     indices: u64,
-    colors: u64,
+    attrs: u64,
+    params: u64,
+    mode: u32,
+    pad: u32,
     band: [f32; 4],
 }
 
@@ -162,14 +272,37 @@ struct Push {
 struct EdgePush {
     view_proj: [f32; 16],
     edges: u64,
+    parts: u64,
+    params: u64,
     viewport: [f32; 2],
     width: f32,
     /// Couleur linéaire non prémultipliée, 8 bits par canal : R, G, B, A.
     color: u32,
-    eye: [f32; 3],
-    pad: f32,
     band: [f32; 4],
 }
+
+/// En-tête des paramètres de l'image (voir `scene_common.glsl`), suivi d'un décalage par pièce.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ParamsHeader {
+    eye: [f32; 3],
+    ortho: u32,
+    forward: [f32; 3],
+    flags: u32,
+    plane: [f32; 4],
+}
+
+/// Réglages de la scène pour une image : coupe et vue éclatée.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SceneParams<'a> {
+    /// Plan de coupe (normale unitaire, distance) : on garde `dot(n, p) <= d`, faces coupées bouchées.
+    pub section: Option<[f32; 4]>,
+    /// Décalage de chaque pièce, indexé par `MeshInput::id` (vide : aucun).
+    pub offsets: &'a [[f32; 3]],
+}
+
+/// Anneau de tampons de paramètres : une image en cours d'exécution n'est jamais réécrite.
+const PARAM_SLOTS: usize = 4;
 
 /// Géométrie d'entrée du moteur de rendu.
 pub struct MeshInput<'a> {
@@ -205,12 +338,24 @@ struct Geometry {
     positions: Buffer,
     normals: Buffer,
     indices: Buffer,
-    colors: Buffer,
+    /// Par sommet : couleur, rang de la géométrie dans le tracé.
+    attrs: Buffer,
     index_count: u32,
-    edges: Option<Buffer>,
+    edges: Option<(Buffer, Buffer)>,
     edge_count: u32,
     /// Premier triangle de chaque géométrie et son identifiant, dans l'ordre du tracé.
     ranges: Vec<(u32, u32)>,
+}
+
+/// Tampons de paramètres (anneau, plus un pour la sélection au pixel) et dernier réglage reçu.
+struct ParamRing {
+    slots: Vec<Buffer>,
+    pick: Buffer,
+    next: usize,
+    current: u64,
+    section: Option<[f32; 4]>,
+    /// Décalages dans l'ordre du tracé.
+    offsets: Vec<[f32; 4]>,
 }
 
 #[repr(C)]
@@ -227,8 +372,10 @@ pub struct SceneRenderer {
     xray: GraphicsPipeline,
     edges: GraphicsPipeline,
     pick_pipeline: GraphicsPipeline,
+    section: GraphicsPipeline,
     pick_target: PickTarget,
     geometry: Option<Geometry>,
+    params: std::cell::RefCell<ParamRing>,
 }
 
 const PICK_FORMAT: vk::Format = vk::Format::R32G32_UINT;
@@ -256,6 +403,17 @@ impl SceneRenderer {
                 depth_compare: vk::CompareOp::ALWAYS,
                 cull_mode: vk::CullModeFlags::NONE,
                 push_constant_size: std::mem::size_of::<BackgroundPush>() as u32,
+                ..Default::default()
+            },
+        )?;
+        let section = GraphicsPipeline::new(
+            gpu,
+            &PipelineDesc {
+                stages: ShaderStages::Vertex { vertex: spirv!("scene.vert"), fragment: spirv!("scene_section.frag") },
+                color_formats: &[color_format],
+                depth_format: Some(depth_format),
+                cull_mode: vk::CullModeFlags::NONE,
+                push_constant_size: std::mem::size_of::<Push>() as u32,
                 ..Default::default()
             },
         )?;
@@ -330,26 +488,56 @@ impl SceneRenderer {
             xray,
             edges,
             pick_pipeline,
+            section,
             pick_target,
             geometry: None,
+            params: std::cell::RefCell::new(ParamRing::new(gpu, 1)?),
         })
     }
 
-    /// Remplace la géométrie affichée (tout est réuni dans un tampon par attribut).
+    /// Paramètres de l'image (œil, projection, coupe, éclatement), à donner avant les tracés de chaque image.
+    pub fn set_params(&self, camera: &Camera, p: &SceneParams<'_>) -> Result<()> {
+        let ids: Vec<u32> = self.geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
+        let offsets: Vec<[f32; 4]> = ids
+            .iter()
+            .map(|&id| p.offsets.get(id as usize).map(|o| [o[0], o[1], o[2], 0.0]).unwrap_or([0.0; 4]))
+            .collect();
+        let mut ring = self.params.borrow_mut();
+        ring.section = p.section;
+        ring.offsets = offsets;
+        let bytes = ring.encode(camera);
+        let k = ring.next;
+        ring.next = (k + 1) % PARAM_SLOTS;
+        if ring.slots[k].size < bytes.len() as u64 {
+            ring.slots[k] = ParamRing::slot(&self.gpu, bytes.len())?;
+        }
+        ring.slots[k].mapped_mut().expect("paramètres non projetés")[..bytes.len()].copy_from_slice(&bytes);
+        ring.current = ring.slots[k].address;
+        Ok(())
+    }
+
+    fn current_params(&self) -> u64 {
+        self.params.borrow().current
+    }
+
+    /// Remplace la géométrie affichée (tout est réuni dans un tampon par attribut). Les paramètres de l'image
+    /// sont remis à zéro (sans coupe ni décalage) jusqu'au prochain [`Self::set_params`].
     pub fn set_meshes(&mut self, meshes: &[MeshInput<'_>]) -> Result<()> {
         let mut pos = Vec::new();
         let mut nrm = Vec::new();
         let mut idx = Vec::new();
-        let mut col = Vec::new();
+        let mut attrs: Vec<[u32; 2]> = Vec::new();
         let mut ranges = Vec::with_capacity(meshes.len());
         let mut segs: Vec<[f32; 3]> = Vec::new();
-        for m in meshes {
+        let mut seg_parts: Vec<u32> = Vec::new();
+        for (k, m) in meshes.iter().enumerate() {
             segs.extend_from_slice(m.edges);
+            seg_parts.extend(std::iter::repeat_n(k as u32, m.edges.len() / 4));
             ranges.push(((idx.len() / 3) as u32, m.id));
             let base = pos.len() as u32;
             pos.extend_from_slice(m.positions);
             nrm.extend_from_slice(m.normals);
-            col.extend(std::iter::repeat_n(u32::from_le_bytes(m.color), m.positions.len()));
+            attrs.extend(std::iter::repeat_n([u32::from_le_bytes(m.color), k as u32], m.positions.len()));
             idx.extend(m.indices.iter().map(|i| i + base));
         }
         if idx.is_empty() {
@@ -361,17 +549,20 @@ impl SceneRenderer {
             positions: Buffer::with_data(&self.gpu, "positions", bytemuck::cast_slice(&pos), usage)?,
             normals: Buffer::with_data(&self.gpu, "normales", bytemuck::cast_slice(&nrm), usage)?,
             indices: Buffer::with_data(&self.gpu, "indices", bytemuck::cast_slice(&idx), usage)?,
-            colors: Buffer::with_data(&self.gpu, "couleurs", bytemuck::cast_slice(&col), usage)?,
+            attrs: Buffer::with_data(&self.gpu, "attributs", bytemuck::cast_slice(&attrs), usage)?,
             index_count: idx.len() as u32,
             edges: if segs.is_empty() {
                 None
             } else {
-                Some(Buffer::with_data(&self.gpu, "arêtes", bytemuck::cast_slice(&segs), usage)?)
+                Some((
+                    Buffer::with_data(&self.gpu, "arêtes", bytemuck::cast_slice(&segs), usage)?,
+                    Buffer::with_data(&self.gpu, "pièces des arêtes", bytemuck::cast_slice(&seg_parts), usage)?,
+                ))
             },
             edge_count: (segs.len() / 4) as u32,
             ranges,
         });
-        Ok(())
+        self.set_params(&Camera::default(), &SceneParams::default())
     }
 
     fn set_rect(&self, cmd: vk::CommandBuffer, rect: [f32; 4]) -> Option<(f32, f32)> {
@@ -413,24 +604,30 @@ impl SceneRenderer {
         let Some((w, h)) = self.set_rect(cmd, rect) else { return };
         let Some(g) = &self.geometry else { return };
         let d = self.gpu.device();
-        let eye = camera.eye();
         let view_proj = camera.view_proj((w / h) as f64);
+        let params = self.current_params();
+        let sectioned = self.params.borrow().section.is_some();
         let push = Push {
             view_proj,
-            eye: [eye[0] as f32, eye[1] as f32, eye[2] as f32],
-            mode: mode as u32,
             positions: g.positions.address,
             normals: g.normals.address,
             indices: g.indices.address,
-            colors: g.colors.address,
+            attrs: g.attrs.address,
+            params,
+            mode: mode as u32,
+            pad: 0,
             band: band.raw(),
         };
-        let p = if mode == RenderMode::XRay { &self.xray } else { &self.pipeline };
+        let p = match mode {
+            RenderMode::XRay => &self.xray,
+            _ if sectioned => &self.section,
+            _ => &self.pipeline,
+        };
         p.bind(cmd);
         p.push(cmd, &push);
         unsafe { d.cmd_draw(cmd, g.index_count, 1, 0, 0) };
         if mode == RenderMode::Edges
-            && let Some(e) = &g.edges
+            && let Some((e, parts)) = &g.edges
         {
             self.edges.bind(cmd);
             self.edges.push(
@@ -438,12 +635,12 @@ impl SceneRenderer {
                 &EdgePush {
                     view_proj,
                     edges: e.address,
+                    parts: parts.address,
+                    params,
                     viewport: [w, h],
                     width: 1.4,
                     // Linéaire (0,012 ; 0,014 ; 0,018), opaque.
                     color: u32::from_le_bytes([3, 4, 5, 255]),
-                    eye: [eye[0] as f32, eye[1] as f32, eye[2] as f32],
-                    pad: 0.0,
                     band: band.raw(),
                 },
             );
@@ -468,17 +665,26 @@ impl SceneRenderer {
         let cx = 2.0 * (pixel[0] as f64 + 0.5) / size[0] as f64 - 1.0;
         let cy = 1.0 - 2.0 * (pixel[1] as f64 + 0.5) / size[1] as f64;
         let view_proj = camera.view_proj_region(aspect, [cx, cy], [size[0] as f64, size[1] as f64]);
-        let eye = camera.eye();
+        let params = {
+            let mut ring = self.params.borrow_mut();
+            let bytes = ring.encode(camera);
+            if ring.pick.size < bytes.len() as u64 {
+                ring.pick = ParamRing::slot(&self.gpu, bytes.len())?;
+            }
+            ring.pick.mapped_mut().expect("paramètres non projetés")[..bytes.len()].copy_from_slice(&bytes);
+            ring.pick.address
+        };
         let t = &self.pick_target;
         let d = self.gpu.device().clone();
         let push = Push {
             view_proj,
-            eye: [eye[0] as f32, eye[1] as f32, eye[2] as f32],
-            mode: 0,
             positions: g.positions.address,
             normals: g.normals.address,
             indices: g.indices.address,
-            colors: g.colors.address,
+            attrs: g.attrs.address,
+            params,
+            mode: 0,
+            pad: 0,
             band: Band::ALL.raw(),
         };
         self.gpu.submit_and_wait(|cmd| unsafe {
@@ -581,20 +787,64 @@ impl SceneRenderer {
         let bytes = t.readback.mapped().expect("tampon de relecture non projeté");
         let word = |i: usize| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
         let (triangle, hit, depth) = (word(0), word(1), f32::from_bits(word(2)) as f64);
-        if hit == 0 || depth <= 0.0 {
+        if hit == 0 || (depth <= 0.0 && !camera.ortho) {
             return Ok(None);
         }
         let k = g.ranges.partition_point(|(first, _)| *first <= triangle).saturating_sub(1);
         let (first, id) = g.ranges[k];
-        // Profondeur inversée : distance de vue = proche / profondeur ; point sur le rayon du pixel.
-        let view_depth = camera.near() / depth;
-        let (cy_, sy_, cp, sp) = (camera.yaw.cos(), camera.yaw.sin(), camera.pitch.cos(), camera.pitch.sin());
-        let back = [cp * sy_, sp, cp * cy_];
-        let right = [cy_, 0.0, -sy_];
-        let up = [-sp * sy_, cp, -sp * cy_];
-        let half_h = (camera.fov_y * 0.5).tan();
-        let dir: [f64; 3] = std::array::from_fn(|i| right[i] * cx * half_h * aspect + up[i] * cy * half_h - back[i]);
-        let position = std::array::from_fn(|i| eye[i] + dir[i] * view_depth);
+        // Point du pixel à la profondeur lue, par la matrice inverse (perspective comme orthographique).
+        let Some(mut position) = camera.unproject(aspect, [cx, cy, depth]) else { return Ok(None) };
+        // Bouchon de coupe : le point vu est sur le plan, le long du rayon du pixel.
+        if hit == 2
+            && let Some(plane) = self.params.borrow().section
+            && let Some(near) = camera.unproject(aspect, [cx, cy, 1.0])
+        {
+            let n = [plane[0] as f64, plane[1] as f64, plane[2] as f64];
+            let r = [position[0] - near[0], position[1] - near[1], position[2] - near[2]];
+            let den = dot(n, r);
+            if den.abs() > 1e-300 {
+                let s = (plane[3] as f64 - dot(n, position)) / den;
+                position = [position[0] + r[0] * s, position[1] + r[1] * s, position[2] + r[2] * s];
+            }
+        }
         Ok(Some(Pick { id, triangle: triangle - first, position }))
+    }
+}
+
+impl ParamRing {
+    fn slot(gpu: &Gpu, bytes: usize) -> Result<Buffer> {
+        Buffer::new(
+            gpu,
+            "paramètres de l'image",
+            bytes.max(64) as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            MemoryLocation::CpuToGpu,
+        )
+    }
+
+    fn new(gpu: &Gpu, parts: usize) -> Result<Self> {
+        let size = std::mem::size_of::<ParamsHeader>() + 16 * parts.max(1);
+        let slots = (0..PARAM_SLOTS).map(|_| Self::slot(gpu, size)).collect::<Result<Vec<_>>>()?;
+        let pick = Self::slot(gpu, size)?;
+        let current = slots[0].address;
+        Ok(ParamRing { slots, pick, next: 0, current, section: None, offsets: Vec::new() })
+    }
+
+    fn encode(&self, camera: &Camera) -> Vec<u8> {
+        let eye = camera.eye();
+        let f = camera.forward();
+        let header = ParamsHeader {
+            eye: [eye[0] as f32, eye[1] as f32, eye[2] as f32],
+            ortho: camera.ortho as u32,
+            forward: [f[0] as f32, f[1] as f32, f[2] as f32],
+            flags: self.section.is_some() as u32,
+            plane: self.section.unwrap_or([0.0, 0.0, 0.0, 0.0]),
+        };
+        let mut bytes = bytemuck::bytes_of(&header).to_vec();
+        if self.offsets.is_empty() {
+            bytes.extend_from_slice(&[0u8; 16]);
+        }
+        bytes.extend_from_slice(bytemuck::cast_slice(&self.offsets));
+        bytes
     }
 }

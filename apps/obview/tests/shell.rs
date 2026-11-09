@@ -247,6 +247,100 @@ fn reglages_barre_et_affichage() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
+/// Points de mesure sur l'arête supérieure avant de la platine (pièce 0) et vers le moyeu.
+fn measures(s: &mut AppState) {
+    use obview::tools::MeasurePoint;
+    let p = &s.parts[0];
+    let (c, h) = (p.center, p.size.map(|v| v * 0.5));
+    let a = MeasurePoint { part: 0, local: [(c[0] - h[0]) as f64, (c[1] + h[1]) as f64, (c[2] + h[2]) as f64] };
+    let b = MeasurePoint { part: 0, local: [(c[0] + h[0]) as f64, (c[1] + h[1]) as f64, (c[2] + h[2]) as f64] };
+    let m = &s.parts[1];
+    let top = MeasurePoint {
+        part: 1,
+        local: [m.center[0] as f64, (m.center[1] + m.size[1] * 0.5) as f64, m.center[2] as f64],
+    };
+    s.measure.done = vec![[a, b]];
+    s.measure.pending = Some(b);
+    s.measure.hover = Some((top, obview::tools::Snap::Vertex));
+    s.tool = obview::shell::Tool::Measure;
+}
+
+/// Outils de la vue (D-26) : mesure, coupe (poignée survolée), vue éclatée, vue orthographique.
+#[test]
+fn outils_deux_themes() {
+    use obview::shell::Tool;
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let mesure = Shot { setup: measures, ..Default::default() };
+    shoot(&gpu, &model, &both(mesure, "outil_mesure_sombre", "outil_mesure_clair"));
+    let coupe = Shot {
+        setup: |s| {
+            s.tool = Tool::Section;
+            s.section.axis = 2;
+            s.section.position = 0.45;
+        },
+        hover: Some(Id::new("outils").with("poignée coupe")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(coupe, "outil_coupe_sombre", "outil_coupe_clair"));
+    let eclatee = Shot {
+        setup: |s| {
+            s.tool = Tool::Explode;
+            s.explode = 0.7;
+        },
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(eclatee, "outil_eclatee_sombre", "outil_eclatee_clair"));
+    let ortho = Shot { setup: |s| s.camera.ortho = true, ..Default::default() };
+    shoot(&gpu, &model, &both(ortho, "vue_orthographique_sombre", "vue_orthographique_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Onglet « Vues » et fenêtre de capture.
+#[test]
+fn vues_et_capture() {
+    use obview::views::SavedView;
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let vues = Shot {
+        setup: |s| {
+            s.left_open = true;
+            s.left_tab = 1;
+            s.views.list = vec![
+                SavedView::from_camera("Vue de détail".into(), &s.camera),
+                SavedView::from_camera("Présentation".into(), &s.camera),
+            ];
+        },
+        hover: Some(Id::new("vues").with("vue").with(0usize)),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(vues, "onglet_vues_sombre", "onglet_vues_clair"));
+    static CLICKS: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("capture")]);
+    let capture = Shot { clicks: &*CLICKS, ..Default::default() };
+    shoot(&gpu, &model, &both(capture, "capture_fenetre_sombre", "capture_fenetre_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Image de la vue sans interface, fond transparent : alpha nul dans un coin, plein sur la pièce.
+#[test]
+fn capture_transparente() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let mut state = AppState::new("support.step", &model);
+    state.viewport.set(obv_ui::Rect::from_xywh(0.0, 0.0, 640.0, 360.0));
+    if let Some((lo, hi)) = model.bounds() {
+        state.camera.frame(lo, hi, 640.0 / 360.0);
+    }
+    let theme = shell::theme(&state);
+    let rgba = obview::frame::capture(&gpu, &model, &state, &theme, [80, 140, 255, 255], 640, 360, true).unwrap();
+    assert_eq!(rgba.len(), 640 * 360 * 4);
+    assert_eq!(rgba[3], 0, "coin transparent");
+    let center = (180 * 640 + 320) * 4;
+    assert_eq!(rgba[center + 3], 255, "pièce opaque");
+    save_png(&out_dir().join("capture_transparente.png"), 640, 360, &rgba);
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
 /// Liste des schémas de navigation ouverte (menu au-dessus de la fenêtre modale).
 #[test]
 fn reglages_liste_ouverte() {

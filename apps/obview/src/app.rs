@@ -29,11 +29,13 @@ use winit::{
 use crate::{
     convert_ui::{Request, Status},
     demo,
-    frame::{EdgeCache, SceneKey, draw_viewport, mesh_inputs},
+    frame::{self, EdgeCache, SceneKey, draw_viewport, mesh_inputs},
     inspector::{self, Inspector},
     navigation::{NavContext, Navigator, WHEEL_NOTCH_PX},
     settings::{Settings, resolve},
-    shell::{self, AppState},
+    shell::{self, AppState, Tool},
+    tools::{self, CaptureSize, MeasurePoint, Snap},
+    views::ViewStore,
 };
 
 /// Entrées accumulées entre deux images.
@@ -88,6 +90,12 @@ pub struct App {
     error: Option<String>,
     /// Le cube de vue a été glissé depuis l'appui : le relâchement n'est pas un clic.
     cube_dragged: bool,
+    /// Vues enregistrées de tous les fichiers.
+    views: ViewStore,
+    /// Clé du fichier ouvert dans `views`.
+    file_key: String,
+    /// Dernier pointeur pour lequel le point de mesure survolé a été calculé.
+    measure_at: Option<Vec2>,
 }
 
 fn load(path: &std::path::Path) -> Result<Model, String> {
@@ -118,7 +126,11 @@ impl App {
             last_save: 0.0,
             error: None,
             cube_dragged: false,
+            views: ViewStore::load(),
+            file_key: "démo".into(),
+            measure_at: None,
         };
+        app.state.views.list = app.views.0.get(&app.file_key).cloned().unwrap_or_default();
         if let Some(p) = path {
             app.open(p);
         }
@@ -145,6 +157,8 @@ impl App {
         s.system_dark = self.state.system_dark;
         s.viewport = self.state.viewport.clone();
         s.inspector = self.state.inspector;
+        self.file_key = std::fs::canonicalize(&path).unwrap_or(path).to_string_lossy().into_owned();
+        s.views.list = self.views.0.get(&self.file_key).cloned().unwrap_or_default();
         self.state = s;
         self.model = Arc::new(m);
         self.scene_key = None;
@@ -225,9 +239,96 @@ impl App {
                     self.start_conversion(path, opts);
                 }
                 Request::OpenResult(p) => self.open(p),
+                Request::Capture { size, transparent } => {
+                    let stem = std::path::Path::new(&self.state.file_name)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "vue".into());
+                    let mut d = rfd::FileDialog::new()
+                        .set_title("Capture")
+                        .set_file_name(format!("{stem}.png"))
+                        .add_filter("Image PNG", &["png"]);
+                    if let Some(w) = &window {
+                        d = d.set_parent(w.as_ref());
+                    }
+                    let Some(path) = d.save_file() else { continue };
+                    if let Err(e) = self.save_capture(&path, size, transparent) {
+                        self.error = Some(format!("capture : {e}"));
+                    }
+                }
                 Request::Reveal(p) => reveal(&p),
             }
         }
+    }
+
+    /// Rend la vue sans l'interface et l'enregistre en PNG.
+    fn save_capture(&mut self, path: &std::path::Path, size: CaptureSize, transparent: bool) -> Result<(), String> {
+        let Some(gfx) = &self.gfx else { return Err("pas de fenêtre".into()) };
+        let v = self.state.viewport.get();
+        let scale = gfx.window.scale_factor() as f32;
+        let (vw, vh) = ((v.width() * scale).round() as u32, (v.height() * scale).round() as u32);
+        let (w, h) = match size {
+            CaptureSize::Uhd => (3840, (3840.0 * vh as f32 / vw.max(1) as f32).round() as u32),
+            _ => size.pixels(vw, vh),
+        };
+        let accent = to_srgb8(shell::selection_color(&self.ui.theme));
+        let rgba = frame::capture(&gfx.gpu, &self.model, &self.state, &self.ui.theme, accent, w, h, transparent)
+            .map_err(|e| e.to_string())?;
+        write_png(path, w, h, &rgba).map_err(|e| e.to_string())
+    }
+
+    /// Point de mesure sous le pointeur, avec accroche aux sommets (10 px) puis aux arêtes (8 px).
+    fn measure_point(
+        scene: &SceneRenderer,
+        model: &Model,
+        state: &AppState,
+        scale: f32,
+        p: Vec2,
+    ) -> Option<(MeasurePoint, Snap)> {
+        let view = state.viewport.get();
+        let px = [(p.x - view.min.x) * scale, (p.y - view.min.y) * scale];
+        let hit = scene.pick(&state.camera, [view.width() * scale, view.height() * scale], px).ok()??;
+        let part = hit.id as usize;
+        let offsets = tools::explode_offsets(state);
+        let o = offsets.get(part).copied().unwrap_or([0.0; 3]);
+        let local = [hit.position[0] - o[0] as f64, hit.position[1] - o[1] as f64, hit.position[2] - o[2] as f64];
+        let mesh = &model.parts.get(part)?.mesh;
+        let t = hit.triangle as usize * 3;
+        let tri: Vec<[f64; 3]> =
+            mesh.indices.get(t..t + 3)?.iter().map(|&i| mesh.positions[i as usize].map(|v| v as f64)).collect();
+        let cam = &state.camera;
+        let screen =
+            |q: [f64; 3]| tools::to_screen(cam, view, [q[0] + o[0] as f64, q[1] + o[1] as f64, q[2] + o[2] as f64]);
+        let dist = |a: Vec2| ((a.x - p.x).powi(2) + (a.y - p.y).powi(2)).sqrt();
+        // Sommet le plus proche à l'écran.
+        let best = tri.iter().filter_map(|q| screen(*q).map(|s| (dist(s), *q))).min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((d, q)) = best
+            && d <= 10.0
+        {
+            return Some((MeasurePoint { part, local: q }, Snap::Vertex));
+        }
+        // Point le plus proche sur les arêtes du triangle (en 3D, le long de l'arête).
+        let mut edge: Option<(f32, [f64; 3])> = None;
+        for k in 0..3 {
+            let (a, b) = (tri[k], tri[(k + 1) % 3]);
+            let ab: [f64; 3] = std::array::from_fn(|i| b[i] - a[i]);
+            let ap: [f64; 3] = std::array::from_fn(|i| local[i] - a[i]);
+            let len2 = ab.iter().map(|v| v * v).sum::<f64>().max(1e-300);
+            let u = (ab.iter().zip(&ap).map(|(x, y)| x * y).sum::<f64>() / len2).clamp(0.0, 1.0);
+            let q: [f64; 3] = std::array::from_fn(|i| a[i] + ab[i] * u);
+            if let Some(s) = screen(q) {
+                let d = dist(s);
+                if edge.is_none_or(|(e, _)| d < e) {
+                    edge = Some((d, q));
+                }
+            }
+        }
+        if let Some((d, q)) = edge
+            && d <= 8.0
+        {
+            return Some((MeasurePoint { part, local: q }, Snap::Edge));
+        }
+        Some((MeasurePoint { part, local }, Snap::Surface))
     }
 
     pub fn start_conversion(&mut self, path: PathBuf, opts: obv_mesh::ConvertOptions) {
@@ -345,6 +446,14 @@ impl App {
                 if let Some(m) = inspector::band_at(view, &self.state, p) {
                     self.state.inspector = Inspector::Single(m);
                 }
+            } else if d.x.abs() + d.y.abs() < 4.0 && self.state.tool == Tool::Measure {
+                // Mesure : premier point, puis second point qui termine la cote.
+                if let Some((q, _)) = Self::measure_point(&gfx.scene, &self.model, &self.state, scale, p) {
+                    match self.state.measure.pending.take() {
+                        Some(a) => self.state.measure.done.push([a, q]),
+                        None => self.state.measure.pending = Some(q),
+                    }
+                }
             } else if d.x.abs() + d.y.abs() < 4.0 {
                 let px = [(p.x - view.min.x) * scale, (p.y - view.min.y) * scale];
                 let hit = gfx.scene.pick(&self.state.camera, [view.width() * scale, view.height() * scale], px);
@@ -389,6 +498,22 @@ impl App {
         {
             let mut to = self.state.camera;
             to.frame(lo, hi, (view.width() / view.height().max(1.0)) as f64);
+            self.nav.animate_to(&self.state.camera, to, now);
+        }
+        // Mesure : point survolé (accroche), recalculé quand le pointeur bouge.
+        if self.state.tool == Tool::Measure && !over_ui && !self.nav.dragging() {
+            if input.pointer != self.measure_at {
+                self.measure_at = input.pointer;
+                self.state.measure.hover = input
+                    .pointer
+                    .filter(|p| view.contains(*p))
+                    .and_then(|p| Self::measure_point(&gfx.scene, &self.model, &self.state, scale, p));
+            }
+        } else {
+            self.state.measure.hover = None;
+            self.measure_at = None;
+        }
+        if let Some(to) = self.state.camera_request.take() {
             self.nav.animate_to(&self.state.camera, to, now);
         }
         if !self.framed && view.width() > 1.0 {
@@ -469,6 +594,12 @@ impl App {
         };
         gfx.window.set_cursor(icon);
 
+        if std::mem::take(&mut self.state.views.dirty) {
+            self.views.0.insert(self.file_key.clone(), self.state.views.list.clone());
+            if let Err(e) = self.views.save() {
+                eprintln!("Obview 3D : vues non enregistrées : {e}");
+            }
+        }
         if self.state.settings_dirty && !self.ui.is_active_any() && now - self.last_save > 0.3 {
             if let Err(e) = self.state.settings.save() {
                 eprintln!("Obview 3D : réglages non enregistrés : {e}");
@@ -686,4 +817,12 @@ pub fn run(path: Option<PathBuf>) -> Result<(), String> {
     el.set_control_flow(ControlFlow::Wait);
     let mut app = App::new(path, el.create_proxy());
     el.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+fn write_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), png::EncodingError> {
+    let f = std::fs::File::create(path)?;
+    let mut e = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header()?.write_image_data(rgba)
 }

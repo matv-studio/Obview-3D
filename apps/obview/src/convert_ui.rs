@@ -62,6 +62,8 @@ pub enum Request {
     OpenResult(std::path::PathBuf),
     /// Montrer le fichier produit dans l'explorateur.
     Reveal(std::path::PathBuf),
+    /// Enregistrer une image de la vue (D-26).
+    Capture { size: crate::tools::CaptureSize, transparent: bool },
 }
 
 fn id(n: &str) -> Id {

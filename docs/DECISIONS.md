@@ -249,3 +249,25 @@ survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser
   Trièdre (CAO, compact), Aucun. Le cube semi-transparent traversé d'axes (D-21) est abandonné.
 - Bibliothèque d'interface : la rotation du texte et des icônes devient une transformation affine 2 × 2
   (`DrawList::set_transform`).
+
+## D-26 · Outils de la vue : projection, mesure, coupe, vue éclatée, capture, vues enregistrées (09/11/2026)
+- Rendu : paramètres de l'image dans un tampon lu par adresse (œil, projection, plan de coupe, décalage de
+  chaque pièce), anneau de quatre tampons pour ne jamais réécrire une image en cours ; les constantes poussées
+  restent sous 128 octets. Attribut par sommet : couleur et rang de la pièce.
+- Projection orthographique (P, bouton de la barre) : même taille visible au plan de la cible que la
+  perspective, profondeur inversée linéaire bornée par le rayon de la scène ; la sélection au pixel passe par
+  l'inverse de la matrice (valable pour les deux projections).
+- Coupe (C) : plan X / Y / Z, côté inversable, position par glissière ou poignée glissée dans la vue (ramenée
+  sur la normale). Faces coupées bouchées : face arrière vue à travers la coupe ombrée comme le plan et hachurée,
+  à sa propre profondeur (une face avant entre le plan et elle la cache, comme la matière) ; le point visé sur un
+  bouchon est ramené sur le plan. Une profondeur écrite au plan a été essayée puis écartée : elle faisait passer
+  l'intérieur devant les faces avant de la partie gardée.
+- Mesure (M) : distance point à point, accroche au sommet (10 px) puis à l'arête (8 px), sinon surface ;
+  points gardés dans le repère de la pièce (la cote suit la vue éclatée et donne la distance réelle) ; cotes
+  dessinées par-dessus la vue ; panneau : distance et écarts X, Y, Z ; Suppr ou « Effacer ».
+- Vue éclatée (E) : décalage du centre de l'assemblage vers le centre de chaque pièce, × 1,5 à 100 %.
+- Capture : taille Vue, 2× ou 4K (3 840 px de large, proportions de la vue), fond du thème ou transparent,
+  suréchantillonnage 2 × 2 en lumière linéaire, PNG.
+- Onglet « Vues » : vues standard et vues enregistrées par fichier (nom, cadrage, projection), clic pour y
+  aller, double-clic pour renommer, gardées dans `vues.json` du dossier de configuration.
+- Panneau de l'outil actif en haut à gauche de la vue ; Échap revient à la sélection.

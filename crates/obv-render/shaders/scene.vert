@@ -10,10 +10,11 @@ layout(location = 3) out vec3 v_bary;
 
 void main() {
     uint i = pc.indices.v[gl_VertexIndex];
-    vec3 p = pc.positions.v[i];
+    uvec2 a = pc.attrs.v[i];
+    vec3 p = pc.positions.v[i] + pc.params.offsets[a.y].xyz;
     v_normal = pc.normals.v[i];
     v_world = p;
-    v_color = pc.colors.v[i];
+    v_color = a.x;
     uint corner = uint(gl_VertexIndex) % 3u;
     v_bary = vec3(corner == 0u, corner == 1u, corner == 2u);
     gl_Position = pc.view_proj * vec4(p, 1.0);

@@ -17,8 +17,6 @@ dirs = "6"
 winit = "0.30"
 rfd = "0.18"
 rayon = "1"
-
-[dev-dependencies]
 png.workspace = true
 
 [lints]

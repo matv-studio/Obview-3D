@@ -1,7 +1,7 @@
 //! Sélection au pixel : bonne géométrie, bon triangle, point de surface exact.
 
 use obv_gpu::{Gpu, GpuDesc, RenderTarget};
-use obv_render::{Camera, MeshInput, SceneRenderer};
+use obv_render::{Camera, MeshInput, SceneParams, SceneRenderer};
 
 fn quad(z: f32, half: f32) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>) {
     let p = vec![[-half, -half, z], [half, -half, z], [half, half, z], [-half, half, z]];
@@ -33,5 +33,26 @@ fn selection_au_pixel() {
     assert!((hit.position[2] + 1.0).abs() < 1e-3, "{:?}", hit.position);
     // Coin : le vide.
     assert!(r.pick(&cam, size, [2.0, 2.0]).unwrap().is_none());
+
+    // Orthographique : même point au centre, point du grand carré à l'abscisse attendue.
+    let ortho = Camera { ortho: true, radius: 1.5, ..cam };
+    let hit = r.pick(&ortho, size, [399.5, 299.5]).unwrap().expect("orthographique : rien au centre");
+    assert_eq!(hit.id, 7);
+    assert!((hit.position[2] - 0.25).abs() < 1e-3, "{:?}", hit.position);
+    let h = 5.0 * (35f64.to_radians() * 0.5).tan();
+    let x = (520.5 / 800.0 * 2.0 - 1.0) * h * 800.0 / 600.0;
+    let hit = r.pick(&ortho, size, [520.0, 300.0]).unwrap().expect("orthographique : rien à droite");
+    assert_eq!(hit.id, 3);
+    assert!((hit.position[0] - x).abs() < 2e-3 && (hit.position[2] + 1.0).abs() < 1e-3, "{:?}", hit.position);
+
+    // Vue éclatée : le petit carré décalé de +1 en x n'est plus au centre.
+    let mut offsets = vec![[0.0; 3]; 8];
+    offsets[7] = [1.0, 0.0, 0.0];
+    r.set_params(&cam, &SceneParams { offsets: &offsets, ..Default::default() }).unwrap();
+    assert_eq!(r.pick(&cam, size, [399.5, 299.5]).unwrap().unwrap().id, 3);
+
+    // Coupe z <= 0 : le petit carré (z = 0,25) est retiré.
+    r.set_params(&cam, &SceneParams { section: Some([0.0, 0.0, 1.0, 0.0]), offsets: &[] }).unwrap();
+    assert_eq!(r.pick(&cam, size, [399.5, 299.5]).unwrap().unwrap().id, 3);
     assert_eq!(gpu.validation_errors(), 0);
 }

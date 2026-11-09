@@ -4,13 +4,14 @@ use std::cell::RefCell;
 
 use obv_gpu::{Gpu, RenderTarget, Result};
 use obv_io::Model;
-use obv_render::{Band, MeshInput, SceneRenderer, feature_edges};
+use obv_render::{Band, MeshInput, RenderMode, SceneParams, SceneRenderer, feature_edges};
 use obv_ui::{Theme, ThemeKind, Ui, gpu::UiRenderer};
 use rayon::prelude::*;
 
 use crate::{
     inspector::{self, Inspector},
     shell::AppState,
+    tools,
 };
 
 /// Angle minimal entre faces voisines pour une arête vive.
@@ -39,29 +40,116 @@ pub fn draw_viewport(
     theme: &Theme,
     scale: f32,
 ) {
-    let v = state.viewport.get();
+    draw_view(scene, cmd, state, theme, state.viewport.get(), scale, false);
+}
+
+/// Comme [`draw_viewport`] pour une vue `v` (pixels logiques) quelconque ; `transparent` : sans fond.
+pub fn draw_view(
+    scene: &SceneRenderer,
+    cmd: obv_gpu::vk::CommandBuffer,
+    state: &AppState,
+    theme: &Theme,
+    v: obv_ui::Rect,
+    scale: f32,
+    transparent: bool,
+) {
     let rect = [v.min.x * scale, v.min.y * scale, v.max.x * scale, v.max.y * scale];
     let c = &theme.color;
     let cam = &state.camera;
+    let offsets = tools::explode_offsets(state);
+    let params = SceneParams { section: tools::section_plane(state), offsets: &offsets };
+    if let Err(e) = scene.set_params(cam, &params) {
+        eprintln!("Obview 3D : paramètres de l'image : {e}");
+    }
+    let background = |top: [f32; 4], bottom: [f32; 4]| {
+        if !transparent {
+            scene.draw_background(cmd, rect, top, bottom);
+        }
+    };
     match state.inspector {
         Inspector::Off => {
             let top = [c.viewport_top.r, c.viewport_top.g, c.viewport_top.b, 1.0];
             let bottom = [c.viewport_bottom.r, c.viewport_bottom.g, c.viewport_bottom.b, 1.0];
-            scene.draw(cmd, rect, cam, top, bottom);
+            background(top, bottom);
+            scene.draw_scene(cmd, rect, cam, RenderMode::Lit, Band::ALL);
         }
         Inspector::Bands => {
             let bg = inspector::background(theme.kind == ThemeKind::Dark);
-            scene.draw_background(cmd, rect, bg, bg);
+            background(bg, bg);
             for (m, band) in inspector::device_bands(v, state, scale) {
                 scene.draw_scene(cmd, rect, cam, m, band);
             }
         }
         Inspector::Single(m) => {
             let bg = inspector::background(theme.kind == ThemeKind::Dark);
-            scene.draw_background(cmd, rect, bg, bg);
+            background(bg, bg);
             scene.draw_scene(cmd, rect, cam, m, Band::ALL);
         }
     }
+}
+
+/// Image de la vue 3D seule (sans interface) de `width` × `height` pixels, suréchantillonnée 2 × 2 quand la
+/// taille le permet, en RGBA sRGB (alpha nul hors des pièces si `transparent`).
+#[allow(clippy::too_many_arguments)]
+pub fn capture(
+    gpu: &Gpu,
+    model: &Model,
+    state: &AppState,
+    theme: &Theme,
+    accent: [u8; 4],
+    width: u32,
+    height: u32,
+    transparent: bool,
+) -> Result<Vec<u8>> {
+    let ss = if width.max(height) * 2 <= 8192 { 2 } else { 1 };
+    let (w, h) = (width * ss, height * ss);
+    let target = RenderTarget::new(gpu, w, h)?;
+    let mut scene = SceneRenderer::new(gpu, RenderTarget::COLOR_FORMAT, RenderTarget::DEPTH_FORMAT)?;
+    let edges = (state.inspector != Inspector::Off).then(|| EdgeCache::compute(model));
+    scene.set_meshes(&mesh_inputs(model, state, accent, edges.as_ref()))?;
+    let v = state.viewport.get();
+    let scale = w as f32 / v.width().max(1.0);
+    let view = obv_ui::Rect::from_xywh(0.0, 0.0, v.width(), v.height());
+    let clear = if transparent { [0.0; 4] } else { [0.0, 0.0, 0.0, 1.0] };
+    target.render(clear, |cmd| draw_view(&scene, cmd, state, theme, view, scale, transparent))?;
+    let rgba = target.read_rgba8();
+    Ok(if ss == 1 { rgba } else { downsample(&rgba, w, h, ss) })
+}
+
+/// Moyenne de blocs `k` × `k` en lumière linéaire (alpha prémultiplié), retour en sRGB.
+fn downsample(src: &[u8], w: u32, h: u32, k: u32) -> Vec<u8> {
+    let to_lin: Vec<f32> = (0..256)
+        .map(|i| {
+            let c = i as f32 / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        })
+        .collect();
+    let (ow, oh) = (w / k, h / k);
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    out.par_chunks_mut((ow * 4) as usize).enumerate().for_each(|(y, row)| {
+        for x in 0..ow as usize {
+            let mut acc = [0f32; 4];
+            for dy in 0..k as usize {
+                for dx in 0..k as usize {
+                    let i = (((y * k as usize + dy) * w as usize) + x * k as usize + dx) * 4;
+                    let a = src[i + 3] as f32 / 255.0;
+                    for c in 0..3 {
+                        acc[c] += to_lin[src[i + c] as usize] * a;
+                    }
+                    acc[3] += a;
+                }
+            }
+            let n = (k * k) as f32;
+            let a = acc[3] / n;
+            for c in 0..3 {
+                let lin = if a > 0.0 { acc[c] / n / a } else { 0.0 };
+                let s = if lin <= 0.0031308 { lin * 12.92 } else { 1.055 * lin.powf(1.0 / 2.4) - 0.055 };
+                row[x * 4 + c] = (s * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+            row[x * 4 + 3] = (a * 255.0).round() as u8;
+        }
+    });
+    out
 }
 
 /// Couleur des pièces sans matériau.

@@ -10,3 +10,5 @@ pub mod navigation;
 pub mod settings;
 pub mod settings_ui;
 pub mod shell;
+pub mod tools;
+pub mod views;
