@@ -1,7 +1,16 @@
 //! Fenêtre de l'application : boucle d'événements, entrées, navigation, sélection au clic, présentation.
 //! Une image n'est rendue que lorsqu'une entrée, une animation ou un chargement l'exige.
 
-use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+        mpsc::{Receiver, channel},
+    },
+    time::Instant,
+};
 
 use obv_gpu::{FRAMES_IN_FLIGHT, Gpu, GpuDesc, PresentMode, Swapchain};
 use obv_io::Model;
@@ -11,13 +20,14 @@ use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, NamedKey, PhysicalKey},
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{CursorIcon, Theme as WinTheme, Window, WindowId},
 };
 
 use crate::{
+    convert_ui::{Request, Status},
     demo,
     frame::{EdgeCache, SceneKey, draw_viewport, mesh_inputs},
     inspector::{self, Inspector},
@@ -51,11 +61,21 @@ struct Gfx {
     gpu: Gpu,
 }
 
+/// Réveil de la boucle d'événements par un fil de travail.
+#[derive(Debug, Clone, Copy)]
+pub struct Wake;
+
+type Loaded = (PathBuf, Result<Model, String>);
+type Converted = Result<(obv_mesh::Report, PathBuf), String>;
+
 pub struct App {
     gfx: Option<Gfx>,
     ui: Ui,
     state: AppState,
-    model: Model,
+    model: Arc<Model>,
+    proxy: EventLoopProxy<Wake>,
+    loading: Option<Receiver<Loaded>>,
+    converting: Option<(Receiver<Converted>, Arc<AtomicU32>)>,
     nav: Navigator,
     pending: Pending,
     start: Instant,
@@ -69,33 +89,23 @@ pub struct App {
 }
 
 fn load(path: &std::path::Path) -> Result<Model, String> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    match ext.as_str() {
-        "glb" => obv_io::read_glb(path).map_err(|e| e.to_string()),
-        _ => Err(format!("format non pris en charge pour l'instant : .{ext}")),
-    }
+    obv_io::read(path).map_err(|e| e.to_string())
 }
 
 impl App {
-    pub fn new(path: Option<PathBuf>) -> Self {
-        let (model, name) = match &path {
-            Some(p) => match load(p) {
-                Ok(m) => (m, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
-                Err(e) => {
-                    eprintln!("Obview 3D : {e}");
-                    (demo::bracket(), "support.step".to_owned())
-                }
-            },
-            None => (demo::bracket(), "support.step".to_owned()),
-        };
-        let mut state = AppState::new(&name, &model);
+    pub fn new(path: Option<PathBuf>, proxy: EventLoopProxy<Wake>) -> Self {
+        let model = demo::bracket();
+        let mut state = AppState::new("support.step", &model);
         state.settings = Settings::load();
         let ui = Ui::new(shell::theme(&state));
-        App {
+        let mut app = App {
             gfx: None,
             ui,
             state,
-            model,
+            model: Arc::new(model),
+            proxy,
+            loading: None,
+            converting: None,
             nav: Navigator::default(),
             pending: Pending::default(),
             start: Instant::now(),
@@ -105,25 +115,133 @@ impl App {
             click_origin: None,
             last_save: 0.0,
             error: None,
+        };
+        if let Some(p) = path {
+            app.open(p);
+        }
+        app
+    }
+
+    /// Lit `path` dans un fil séparé ; l'interface reste vivante (indicateur dans la barre du haut).
+    fn open(&mut self, path: PathBuf) {
+        let (tx, rx) = channel();
+        let proxy = self.proxy.clone();
+        self.state.loading = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        std::thread::spawn(move || {
+            let r = load(&path);
+            let _ = tx.send((path, r));
+            let _ = proxy.send_event(Wake);
+        });
+        self.loading = Some(rx);
+    }
+
+    fn finish_open(&mut self, path: PathBuf, m: Model) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut s = AppState::new(&name, &m);
+        std::mem::swap(&mut s.settings, &mut self.state.settings);
+        s.system_dark = self.state.system_dark;
+        s.viewport = self.state.viewport.clone();
+        s.inspector = self.state.inspector;
+        self.state = s;
+        self.model = Arc::new(m);
+        self.scene_key = None;
+        self.edges = None;
+        self.framed = false;
+    }
+
+    /// Réponses des fils de travail.
+    fn poll_jobs(&mut self) {
+        if let Some(rx) = &self.loading
+            && let Ok((path, r)) = rx.try_recv()
+        {
+            self.loading = None;
+            self.state.loading = None;
+            match r {
+                Ok(m) => self.finish_open(path, m),
+                Err(e) => self.error = Some(e),
+            }
+        }
+        if let Some((rx, progress)) = &self.converting {
+            match rx.try_recv() {
+                Ok(Ok((r, path))) => {
+                    self.state.convert.status = Status::Done {
+                        triangles_in: r.triangles_in(),
+                        triangles_out: r.triangles_out(),
+                        deviation_mm: r.deviation() as f64 * self.model.unit_m * 1000.0,
+                        bytes: r.bytes,
+                        path,
+                    };
+                    self.converting = None;
+                }
+                Ok(Err(e)) => {
+                    self.state.convert.status = Status::Failed(e);
+                    self.converting = None;
+                }
+                Err(_) => self.state.convert.status = Status::Running(f32::from_bits(progress.load(Ordering::Relaxed))),
+            }
         }
     }
 
-    fn open(&mut self, path: PathBuf) {
-        match load(&path) {
-            Ok(m) => {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let mut s = AppState::new(&name, &m);
-                std::mem::swap(&mut s.settings, &mut self.state.settings);
-                s.system_dark = self.state.system_dark;
-                s.viewport = self.state.viewport.clone();
-                self.state = s;
-                self.model = m;
-                self.scene_key = None;
-                self.edges = None;
-                self.framed = false;
+    /// Demandes de l'interface : dialogues natifs, fils de travail.
+    fn handle_requests(&mut self) {
+        let window = self.gfx.as_ref().map(|g| g.window.clone());
+        for req in std::mem::take(&mut self.state.requests) {
+            match req {
+                Request::OpenFile => {
+                    let mut d = rfd::FileDialog::new()
+                        .set_title("Ouvrir")
+                        .add_filter("Modèles 3D", obv_io::EXTENSIONS)
+                        .add_filter("Tous les fichiers", &["*"]);
+                    if let Some(w) = &window {
+                        d = d.set_parent(w.as_ref());
+                    }
+                    if let Some(p) = d.pick_file() {
+                        self.open(p);
+                    }
+                }
+                Request::Convert => {
+                    let opts = obv_mesh::ConvertOptions {
+                        format: self.state.convert.format,
+                        tolerance_m: self.state.convert.tolerance_mm / 1000.0,
+                    };
+                    let stem = std::path::Path::new(&self.state.file_name)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "modele".into());
+                    let ext = opts.format.extension();
+                    let mut d = rfd::FileDialog::new()
+                        .set_title("Convertir")
+                        .set_file_name(format!("{stem}.{ext}"))
+                        .add_filter(opts.format.label(), &[ext]);
+                    if let Some(w) = &window {
+                        d = d.set_parent(w.as_ref());
+                    }
+                    let Some(path) = d.save_file() else { continue };
+                    self.start_conversion(path, opts);
+                }
+                Request::OpenResult(p) => self.open(p),
+                Request::Reveal(p) => reveal(&p),
             }
-            Err(e) => self.error = Some(e),
         }
+    }
+
+    pub fn start_conversion(&mut self, path: PathBuf, opts: obv_mesh::ConvertOptions) {
+        let (tx, rx) = channel();
+        let progress = Arc::new(AtomicU32::new(0));
+        let (model, proxy, prog) = (self.model.clone(), self.proxy.clone(), progress.clone());
+        std::thread::spawn(move || {
+            let p2 = proxy.clone();
+            let r = obv_mesh::convert(&model, &path, opts, &|f| {
+                prog.store(f.to_bits(), Ordering::Relaxed);
+                let _ = p2.send_event(Wake);
+            })
+            .map(|r| (r, path))
+            .map_err(|e| e.to_string());
+            let _ = tx.send(r);
+            let _ = proxy.send_event(Wake);
+        });
+        self.state.convert.status = Status::Running(0.0);
+        self.converting = Some((rx, progress));
     }
 
     fn init_graphics(&mut self, el: &ActiveEventLoop) -> Result<(), String> {
@@ -179,6 +297,7 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        self.poll_jobs();
         let Some(gfx) = &mut self.gfx else { return };
         let phys = gfx.window.inner_size();
         if phys.width == 0 || phys.height == 0 {
@@ -251,6 +370,13 @@ impl App {
         self.ui.theme = shell::theme(&self.state);
         let mut root = shell::build(&mut self.ui, &mut self.state);
         self.ui.finish(&mut root);
+        if !self.state.requests.is_empty() {
+            self.handle_requests();
+            if let Some(g) = &self.gfx {
+                g.window.request_redraw();
+            }
+        }
+        let Some(gfx) = &mut self.gfx else { return };
 
         // Géométrie : envoyée seulement quand la sélection, la visibilité ou l'accent changent.
         let accent = to_srgb8(self.ui.theme.color.accent);
@@ -396,7 +522,26 @@ fn map_key(code: PhysicalKey, logical: &winit::keyboard::Key) -> Option<Key> {
     }
 }
 
-impl ApplicationHandler for App {
+/// Montre le fichier dans le gestionnaire de fichiers du système.
+fn reveal(p: &std::path::Path) {
+    #[cfg(windows)]
+    let r = std::process::Command::new("explorer").arg(format!("/select,{}", p.display())).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg("-R").arg(p).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(p.parent().unwrap_or(p)).spawn();
+    if let Err(e) = r {
+        eprintln!("Obview 3D : {e}");
+    }
+}
+
+impl ApplicationHandler<Wake> for App {
+    fn user_event(&mut self, _el: &ActiveEventLoop, _e: Wake) {
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+    }
+
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_none() {
             if let Err(e) = self.init_graphics(el) {
@@ -505,8 +650,8 @@ impl ApplicationHandler for App {
 
 /// Lance la fenêtre. `path` : fichier à ouvrir.
 pub fn run(path: Option<PathBuf>) -> Result<(), String> {
-    let el = EventLoop::new().map_err(|e| e.to_string())?;
+    let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     el.set_control_flow(ControlFlow::Wait);
-    let mut app = App::new(path);
+    let mut app = App::new(path, el.create_proxy());
     el.run_app(&mut app).map_err(|e| e.to_string())
 }

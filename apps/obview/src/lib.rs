@@ -1,6 +1,7 @@
 //! Application Obview 3D : coque, cube de vue, image hors écran (captures et essais).
 
 pub mod app;
+pub mod convert_ui;
 pub mod demo;
 pub mod frame;
 pub mod inspector;

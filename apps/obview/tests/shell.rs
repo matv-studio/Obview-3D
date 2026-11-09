@@ -221,6 +221,35 @@ fn inspecteur_deux_themes() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
+/// Fenêtre de conversion : réglages, puis bilan.
+#[test]
+fn conversion_deux_themes() {
+    use obview::convert_ui::Status;
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let idle = Shot {
+        setup: |s| s.convert.open = true,
+        hover: Some(Id::new("convertir").with("préréglage").with(2)),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(idle, "conversion_sombre", "conversion_claire"));
+    let done = Shot {
+        setup: |s| {
+            s.convert.open = true;
+            s.convert.status = Status::Done {
+                triangles_in: 996,
+                triangles_out: 412,
+                deviation_mm: 0.0187,
+                bytes: 25_400,
+                path: "support.glb".into(),
+            };
+        },
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(done, "conversion_bilan_sombre", "conversion_bilan_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
 /// Captures sur un fichier local (`OBV_SAMPLE_GLB`), à l'échelle 2, sans référence : `cargo test -- --ignored`.
 #[test]
 #[ignore]

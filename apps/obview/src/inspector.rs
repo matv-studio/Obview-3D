@@ -34,31 +34,40 @@ fn normal() -> Vec2 {
     vec2(t.cos(), t.sin())
 }
 
-/// Étendue des bandes le long de la normale, en pixels logiques : la sphère englobante du modèle projetée (stable
-/// pendant l'orbite), resserrée pour que chaque bande couvre une partie du modèle ; à défaut, la vue.
+/// Étendue des bandes le long de la normale, en pixels logiques : celle des coins projetés de la boîte englobante
+/// du modèle, resserrée de 6 % de chaque côté, pour que chaque rendu montre une partie du modèle quelle que soit
+/// sa forme ; à défaut (modèle absent ou derrière l'œil), la vue.
 pub fn span(view: Rect, s: &AppState) -> (f32, f32) {
     let n = normal();
     let yc = view.center().y;
     let whole = (view.min.x * n.x + yc * n.y, view.max.x * n.x + yc * n.y);
     let Some((lo, hi)) = s.scene_bounds else { return whole };
-    let c: [f64; 3] = std::array::from_fn(|i| (lo[i] + hi[i]) as f64 * 0.5);
-    let r = (0..3).map(|i| ((hi[i] - lo[i]) as f64 * 0.5).powi(2)).sum::<f64>().sqrt();
     let cam = &s.camera;
     let (right, up, back) = crate::navigation::basis(cam.yaw, cam.pitch);
     let eye = cam.eye();
-    let rel = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
     let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let depth = -dot(rel, back);
-    if depth <= r * 0.1 {
-        return whole;
-    }
     let half_h = (cam.fov_y * 0.5).tan();
-    let px_per_unit = view.height() as f64 * 0.5 / (depth * half_h);
-    let cx = view.center().x as f64 + dot(rel, right) * px_per_unit;
-    let cy = view.center().y as f64 - dot(rel, up) * px_per_unit;
-    let rad = (r * px_per_unit * 0.72) as f32;
-    let u = cx as f32 * n.x + cy as f32 * n.y;
-    if rad < 24.0 { whole } else { (u - rad, u + rad) }
+    let (mut umin, mut umax) = (f32::MAX, f32::MIN);
+    for k in 0..8 {
+        let c = [
+            if k & 1 == 0 { lo[0] } else { hi[0] } as f64,
+            if k & 2 == 0 { lo[1] } else { hi[1] } as f64,
+            if k & 4 == 0 { lo[2] } else { hi[2] } as f64,
+        ];
+        let rel = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+        let depth = -dot(rel, back);
+        if depth <= cam.near() {
+            return whole;
+        }
+        let px_per_unit = view.height() as f64 * 0.5 / (depth * half_h);
+        let x = view.center().x as f64 + dot(rel, right) * px_per_unit;
+        let y = view.center().y as f64 - dot(rel, up) * px_per_unit;
+        let u = x as f32 * n.x + y as f32 * n.y;
+        umin = umin.min(u);
+        umax = umax.max(u);
+    }
+    let shrink = (umax - umin) * 0.06;
+    if umax - umin < 48.0 { whole } else { (umin + shrink, umax - shrink) }
 }
 
 /// Limites des bandes le long de la normale : N + 1 valeurs, infinies aux extrémités.

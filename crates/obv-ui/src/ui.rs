@@ -539,6 +539,11 @@ impl Ui {
         *v
     }
 
+    /// Demande une autre image (animation continue : indicateur d'attente).
+    pub fn keep_animating(&mut self) {
+        self.animating = true;
+    }
+
     /// Une nouvelle image est-elle nécessaire sans nouvelle entrée (animation, info-bulle, curseur) ?
     pub fn wants_redraw(&self) -> bool {
         self.animating

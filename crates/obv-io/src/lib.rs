@@ -1,10 +1,35 @@
-//! Lecture des fichiers 3D vers le modèle interne (D-07). Premier lecteur : glTF binaire (GLB).
+//! Lecture des fichiers 3D vers le modèle interne (D-07) : glTF binaire (GLB), STL (binaire et texte), OBJ,
+//! FBX (ufbx).
 //!
-//! Le fichier est projeté en mémoire ; chaque primitive est décodée en parallèle.
+//! Les fichiers sont projetés en mémoire et décodés en parallèle.
 
+mod fbx;
 mod glb;
+pub mod normals;
+mod obj;
+mod stl;
 
+use std::path::Path;
+
+pub use fbx::read_fbx;
 pub use glb::read_glb;
+pub use obj::{parse_obj, read_obj};
+pub use stl::{parse_stl, read_stl};
+
+/// Extensions reconnues (minuscules).
+pub const EXTENSIONS: &[&str] = &["glb", "stl", "obj", "fbx"];
+
+/// Lit un fichier d'après son extension.
+pub fn read(path: &Path) -> Result<Model, ReadError> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "glb" => read_glb(path),
+        "stl" => read_stl(path),
+        "obj" => read_obj(path),
+        "fbx" => read_fbx(path),
+        _ => Err(ReadError::Unsupported(ext)),
+    }
+}
 
 /// Maillage d'une pièce, positions déjà placées dans le repère de la scène.
 #[derive(Clone, Debug, Default)]
@@ -62,4 +87,6 @@ pub enum ReadError {
     Json(#[from] serde_json::Error),
     #[error("fichier invalide : {0}")]
     Invalid(String),
+    #[error("format non pris en charge : .{0}")]
+    Unsupported(String),
 }

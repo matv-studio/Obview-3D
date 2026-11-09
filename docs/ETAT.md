@@ -3,7 +3,7 @@
 Mis à jour : 09/11/2026.
 
 ## Fait
-- Décisions D-01 à D-18 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-20 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -30,14 +30,18 @@ Mis à jour : 09/11/2026.
 - Inspecteur des rendus (D-15, D-18) : bandes diagonales Éclairé, Couleur, Normales, Topologie, Rayons X,
   Arêtes (arêtes vives + contours apparents), noms le long des traits, rendu isolé au clic, retour par
   l'étiquette ou Échap, triangles et sommets en bas à gauche (R ou bouton de la barre).
+- Lecteurs STL (binaire, texte), OBJ (parallèle), FBX (ufbx) ; ouverture par dialogue natif (Ctrl+O),
+  glisser-déposer ou ligne de commande, lecture dans un fil séparé avec indicateur (D-19).
+- Moteur de conversion `obv-mesh` (D-20) : écart garanti mesuré, GLB / OBJ / FBX ; fenêtre « Convertir »
+  (format, précision, écart en mm, progression, bilan, ouverture du résultat) ; en ligne de commande :
+  `obview --convertir <entrée> <sortie> --ecart <mm>`.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
-2. Cube de vue cliquable (faces, arêtes, coins), menu du fichier (ouvrir, récents), dialogue d'ouverture natif,
-   chargement en tâche de fond avec progression.
-3. Lecteurs STL / OBJ / FBX parallèles.
-4. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie.
+2. Cube de vue cliquable (faces, arêtes, coins) ; fichiers récents.
+3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie.
+4. Conversion : UV et matériaux, compression meshopt du GLB, simplification adaptée aux surfaces courbes.
 5. Grappes et niveaux de détail ; tri GPU ; mesh shaders.
-6. STEP par OpenCASCADE ; arbre des pièces ; mesure exacte ; coupe ; vue éclatée.
-7. Conversion (soudure, simplification avec arêtes vives, écart de Hausdorff, écriture GLB / OBJ / FBX).
+6. STEP / IGES par OpenCASCADE 8.0.1 (paquets conda-forge, pont cxx) : arbre d'assemblage, noms, couleurs,
+   maillage à flèche et angle maîtrisés ; mesure exacte ; coupe ; vue éclatée.

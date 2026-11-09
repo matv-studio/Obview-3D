@@ -132,3 +132,32 @@ contrôle en 2560 × 1440 (échelle 1,25 à 1,5).
 - Rayons X : lueur additive, plus forte vue de biais, sans tri ni écriture de profondeur.
 - Noms des rendus le long des traits : texte tourné (rotation des glyphes dans le nuanceur de l'interface).
 
+## D-19 · Lecteurs STL, OBJ, FBX (09/11/2026)
+- STL : binaire reconnu à la taille annoncée (un en-tête « solid » ne suffit pas), triangles décodés en
+  parallèle ; texte ligne à ligne. Unité supposée : millimètre.
+- OBJ : fichier coupé en tranches aux fins de ligne, tranches décodées en parallèle, indices négatifs résolus
+  par décalages cumulés ; `o` / `g` → pièces ; polygones en éventail. Unité supposée : millimètre.
+- FBX : ufbx (bibliothèque C de référence, toutes versions binaires et texte), repère Y vers le haut, mètres,
+  instances dupliquées avec leur transformation.
+- Sans normales dans le fichier : soudure par position puis normales lissées sous un angle de pli de 30°
+  (pondération angle × aire), sommets dupliqués seulement le long des arêtes vives.
+- En suspens : lecture des UV et des couleurs ou matériaux (OBJ/MTL, FBX, GLB) ; unité réglable par fichier.
+
+## D-20 · Moteur de conversion (09/11/2026)
+- Soudure des positions distantes de moins de 1e-6 × la diagonale (coutures des exports), puis soudure exacte
+  position + normale.
+- Simplification meshoptimizer avec les normales comme attributs (poids à l'échelle de la tolérance) : les
+  discontinuités de normales (arêtes vives) sont gardées.
+- Écart garanti : l'erreur interne de meshoptimizer sous-estime l'écart réel (≈ ×2 sur les surfaces courbes, à
+  cause des triangles allongés). L'écart de Hausdorff est mesuré dans les deux sens (sommets et centres des
+  triangles, arbre SAH, point le plus proche d'Ericson) et la cible est corrigée (proportionnelle puis
+  dichotomie, 8 essais au plus). Deux réglages sont essayés en parallèle (triangles libres, triangles
+  régularisés) ; le résultat accepté le plus léger l'emporte.
+- Puis ordre des triangles pour le cache des sommets et le recouvrement, ordre des sommets pour la lecture.
+- Écriture : GLB (mètres, indices 16 bits quand c'est possible), OBJ (millimètres), FBX binaire 7.4 écrit par
+  Obview (millimètres, `UnitScaleFactor` 0,1), relu par ufbx dans les essais.
+- Montre de l'utilisateur (453 278 triangles, profil de développement, 2 cœurs) : 0,005 mm → 72,7 %
+  des triangles en 11,7 s ; 0,02 mm → 36,3 % en 8,1 s ; écart mesuré égal ou inférieur à la tolérance.
+- En suspens : simplification propre aux surfaces courbes (coût de collapse qui mesure l'écart au milieu des
+  arêtes), compression EXT_meshopt_compression et quantification pour le GLB, UV et matériaux.
+

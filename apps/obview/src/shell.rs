@@ -11,6 +11,7 @@ use obv_ui::{
 };
 
 use crate::{
+    convert_ui::{self, ConvertState, Request},
     inspector::{self, Inspector},
     settings::{Settings, ThemeChoice, Units},
     settings_ui, viewcube,
@@ -58,6 +59,12 @@ pub struct AppState {
     pub camera: Camera,
     /// Vues de rendu (D-15).
     pub inspector: Inspector,
+    /// Fenêtre de conversion.
+    pub convert: ConvertState,
+    /// Demandes à traiter par la fenêtre de l'application (fichiers, fils de travail).
+    pub requests: Vec<Request>,
+    /// Fichier en cours de lecture (nom affiché).
+    pub loading: Option<String>,
     /// Boîte englobante du modèle (unités du fichier).
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
     /// Rectangle de la vue 3D après la dernière mise en page (pixels logiques).
@@ -99,6 +106,9 @@ impl AppState {
             camera: Camera::default(),
             inspector: Inspector::Off,
             scene_bounds: model.bounds(),
+            convert: ConvertState::default(),
+            requests: Vec::new(),
+            loading: None,
             viewport: Rc::new(Cell::new(Rect::ZERO)),
         }
     }
@@ -144,6 +154,19 @@ fn length(v: f32, unit_m: f64, units: Units) -> String {
     units.format(v as f64 * unit_m)
 }
 
+/// Indicateur d'attente : cercle ouvert qui tourne.
+pub fn spinner(ui: &mut Ui, size: f32, color: Color) -> Node {
+    let t = ui.input.time as f32;
+    ui.keep_animating();
+    Node::custom(move |p, r| {
+        let c = r.center();
+        p.dl.set_rotation(c, t * 6.0);
+        p.res.icons.draw(p.dl, p.res.atlas, "loader-circle", r, size, color);
+        p.dl.clear_rotation();
+    })
+    .size(Size::Px(size), Size::Px(size))
+}
+
 fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let c = ui.theme.color.clone();
     let m = ui.theme.size.clone();
@@ -155,14 +178,21 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
         .child(Node::icon("box", 15.0, Color::WHITE));
     let file = Node::row()
         .id(Id::new("fichier"))
-        .tooltip("Ouvrir un fichier")
+        .tooltip_shortcut("Ouvrir un fichier", "Ctrl O")
         .gap(6.0)
         .padding(Edges::xy(8.0, 0.0))
         .height(Size::Px(28.0))
         .radius(6.0)
         .bg(ui.state_color(Id::new("fichier"), Color::TRANSPARENT, c.raised_hover, c.raised_hover))
-        .child(Node::icon("file-box", 15.0, c.text_secondary))
-        .child(Node::text(&s.file_name, TextStyle::new(m.font_size, Weight::Medium), c.text))
+        .child(match &s.loading {
+            Some(_) => spinner(ui, 15.0, c.accent),
+            None => Node::icon("file-box", 15.0, c.text_secondary),
+        })
+        .child(Node::text(
+            s.loading.as_deref().unwrap_or(&s.file_name),
+            TextStyle::new(m.font_size, Weight::Medium),
+            c.text,
+        ))
         .child(Node::icon("chevron-down", 13.0, c.text_tertiary));
     let left = Node::row()
         .gap(10.0)
@@ -380,6 +410,7 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
         .child(properties_panel(ui, s));
     let root = Node::column().fill().child(topbar(ui, s)).child(body);
     settings_ui::dialog(ui, s);
+    convert_ui::dialog(ui, s);
     root
 }
 
@@ -392,6 +423,15 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     if ui.clicked(Id::new("réglages")) {
         s.settings_open = true;
     }
+    if ui.clicked(Id::new("convertir")) {
+        s.convert.open = true;
+        if !matches!(s.convert.status, convert_ui::Status::Running(_)) {
+            s.convert.status = convert_ui::Status::Idle;
+        }
+    }
+    if ui.clicked(Id::new("fichier")) || (ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('o'))) {
+        s.requests.push(Request::OpenFile);
+    }
     let ctrl = ui.input.modifiers.ctrl;
     if ctrl && ui.input.keys.contains(&Key::Char(',')) {
         s.settings_open = !s.settings_open;
@@ -399,7 +439,7 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     if !s.settings_open && ctrl && ui.input.keys.contains(&Key::Char('f')) {
         ui.focus(Id::new("recherche"));
     }
-    let plain = !ctrl && !ui.text_focused() && !s.settings_open;
+    let plain = !ctrl && !ui.text_focused() && !s.settings_open && !s.convert.open;
     if ui.clicked(Id::new("rendu")) || (plain && ui.input.keys.contains(&Key::Char('r'))) {
         s.inspector = if s.inspector == Inspector::Off { Inspector::Bands } else { Inspector::Off };
     }
