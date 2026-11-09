@@ -50,7 +50,7 @@ fn convert(args: &[String]) -> Result<(), String> {
         .find(|f| f.extension() == ext)
         .ok_or_else(|| format!("format de sortie inconnu : .{ext}"))?;
     let t = std::time::Instant::now();
-    let model = obv_io::read(std::path::Path::new(input)).map_err(|e| e.to_string())?;
+    let model = obview::app::load(std::path::Path::new(input))?;
     let t_read = t.elapsed();
     let opts = obv_mesh::ConvertOptions {
         format,

@@ -1,0 +1,18 @@
+[package]
+name = "obv-cad"
+description = "Lecture STEP et IGES par OpenCASCADE (XCAF) : assemblages, noms, couleurs, maillage maîtrisé."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+obv-io = { path = "../obv-io" }
+cxx = "1.0.205"
+thiserror.workspace = true
+
+[build-dependencies]
+cxx-build = "1.0.205"
+
+[lints]
+workspace = true

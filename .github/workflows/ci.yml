@@ -18,6 +18,7 @@ jobs:
   linux:
     name: Linux (lavapipe)
     runs-on: ubuntu-24.04
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - name: Vulkan logiciel et compilateur de shaders
@@ -25,13 +26,34 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq mesa-vulkan-drivers glslang-tools vulkan-tools vulkan-validationlayers
           vulkaninfo --summary | grep -E "deviceName|apiVersion|driverInfo"
+      - uses: actions/cache/restore@v4
+        id: occt
+        with:
+          path: ~/occt
+          key: occt-linux-${{ hashFiles('tools/occt.sh') }}
+      - name: OpenCASCADE (statique, D-27)
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install -y -qq ninja-build
+          tools/occt.sh ~/occt
+          rm -rf ~/occt-work
+      # Gardé dès sa construction, même si une étape suivante échoue.
+      - uses: actions/cache/save@v4
+        if: steps.occt.outputs.cache-hit != 'true'
+        with:
+          path: ~/occt
+          key: occt-linux-${{ hashFiles('tools/occt.sh') }}
+      - name: Variables OpenCASCADE
+        run: |
+          echo "OCCT_DIR=$HOME/occt" >> "$GITHUB_ENV"
+          echo "OBV_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh') }}
       - name: Format
         run: cargo fmt --all --check
       - name: Analyse (clippy)
@@ -49,6 +71,7 @@ jobs:
   windows:
     name: Windows (construction)
     runs-on: windows-2022
+    timeout-minutes: 240
     env:
       VULKAN_SDK: C:\VulkanSDK
     steps:
@@ -66,13 +89,34 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile vulkansdk.exe
           Start-Process -FilePath .\vulkansdk.exe -ArgumentList "--root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install copy_only=1" -Wait -NoNewWindow
           Get-ChildItem C:\VulkanSDK\Bin\glslangValidator.exe
+      - uses: actions/cache/restore@v4
+        id: occt
+        with:
+          path: C:\occt
+          key: occt-windows-${{ hashFiles('tools/occt.sh') }}
+      - name: OpenCASCADE (statique, D-27)
+        if: steps.occt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          tools/occt.sh /c/occt
+          rm -rf /c/occt-work
+      - uses: actions/cache/save@v4
+        if: steps.occt.outputs.cache-hit != 'true'
+        with:
+          path: C:\occt
+          key: occt-windows-${{ hashFiles('tools/occt.sh') }}
+      - name: Variables OpenCASCADE
+        shell: bash
+        run: |
+          echo "OCCT_DIR=C:\occt" >> "$GITHUB_ENV"
+          echo "OBV_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: windows-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh') }}
       - name: Analyse (clippy)
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Construction

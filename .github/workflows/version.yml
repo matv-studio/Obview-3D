@@ -1,0 +1,84 @@
+name: Version
+
+# Construit Obview 3D pour Windows (OpenCASCADE lié statiquement) et prépare un brouillon de version GitHub
+# avec l'archive. La publication reste un geste de l'utilisateur (D-28).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Numéro de version (ex. 0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  windows:
+    name: Windows (version)
+    runs-on: windows-2022
+    timeout-minutes: 300
+    env:
+      VULKAN_SDK: C:\VulkanSDK
+      OCCT_DIR: C:\occt
+      OBV_REQUIRE_OCCT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-1.4.335.0
+      - name: SDK Vulkan (glslangValidator)
+        if: steps.sdk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/1.4.335.0/windows/vulkansdk-windows-X64-1.4.335.0.exe"
+          Invoke-WebRequest -Uri $url -OutFile vulkansdk.exe
+          Start-Process -FilePath .\vulkansdk.exe -ArgumentList "--root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install copy_only=1" -Wait -NoNewWindow
+      - uses: actions/cache/restore@v4
+        id: occt
+        with:
+          path: C:\occt
+          key: occt-windows-${{ hashFiles('tools/occt.sh') }}
+      - name: OpenCASCADE (statique, D-27)
+        if: steps.occt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          tools/occt.sh /c/occt
+          rm -rf /c/occt-work
+      - uses: actions/cache/save@v4
+        if: steps.occt.outputs.cache-hit != 'true'
+        with:
+          path: C:\occt
+          key: occt-windows-${{ hashFiles('tools/occt.sh') }}
+      - name: Construction
+        run: cargo build --release -p obview
+      - name: Archive
+        shell: pwsh
+        run: |
+          $v = "${{ inputs.version }}"
+          $dir = "Obview-3D-$v-windows-x64"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target/release/obview.exe "$dir/Obview 3D.exe"
+          New-Item -ItemType Directory "$dir/licences" | Out-Null
+          Copy-Item crates/obv-ui/assets/fonts/OFL-geist.txt "$dir/licences/Geist-OFL.txt"
+          Copy-Item C:\occt\licence\* "$dir/licences/"
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+          "ARCHIVE=$dir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Brouillon de version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ inputs.version }}"
+          printf '%s\n' \
+            "Première construction Windows d'Obview 3D." \
+            "" \
+            "Contenu : visionneuse STEP, IGES, STL, OBJ, glTF / GLB, FBX ; conversion GLB, OBJ, FBX ; outils de vue." \
+            "Archive à extraire, puis lancer « Obview 3D.exe » (Windows 10 ou 11, pilote Vulkan 1.3)." > notes.md
+          gh release create "v$v" "$ARCHIVE" --draft --target "$GITHUB_SHA" --title "Obview 3D $v" --notes-file notes.md

@@ -67,16 +67,21 @@ Dépôt
 - Shaders : GLSL compilés en SPIR-V par `glslangValidator` au moment de la construction (`build.rs`).
 - Les essais de rendu tournent **hors écran** (aucune fenêtre) : `cargo test` suffit, captures écrites en PNG.
 - La machine n'a que 2 cœurs et ~7 Go : construire en `--release` seulement quand nécessaire.
+- OpenCASCADE (D-27) : `tools/occt.sh /opt/occt` (sources clonées depuis GitHub, ~3 h sur 2 cœurs ; dossier
+  déjà construit : rien à refaire), puis `export OCCT_DIR=/opt/occt` avant `cargo` ; sans cette variable,
+  la lecture STEP / IGES est absente de la construction.
 
 ## Carte du dépôt
 
 - `crates/obv-gpu` : couche Vulkan (instance, appareil, mémoire, transferts, pipelines, cibles hors écran, fenêtre).
 - `crates/obv-render` : rendu de la scène (géométrie en grappes, tri des grappes, ombrage, arêtes, sélection).
 - `crates/obv-ui` : bibliothèque d'interface maison (mise en page, widgets, texte, thèmes, info-bulles).
-- `crates/obv-scene`, `crates/obv-io`, `crates/obv-cad`, `crates/obv-mesh` : voir `docs/ARCHITECTURE.md`.
+- `crates/obv-cad` : lecture STEP / IGES (pont `cxx` vers OpenCASCADE, `cpp/reader.cpp`).
+- `crates/obv-io`, `crates/obv-mesh` : lecteurs des maillages, moteur de conversion ; voir `docs/ARCHITECTURE.md`.
 - `apps/obview` : l'application.
 - `docs/` : `ETAT.md`, `DECISIONS.md`, `ARCHITECTURE.md`.
-- `tools/` : scripts de vérification.
+- `tools/` : vérification (`verify.sh`), construction d'OpenCASCADE (`occt.sh`).
+- `.github/workflows/` : `ci.yml` (Linux lavapipe, Windows), `version.yml` (brouillon de version Windows).
 
 ## Pièges connus
 

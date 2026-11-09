@@ -271,3 +271,32 @@ survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser
 - Onglet « Vues » : vues standard et vues enregistrées par fichier (nom, cadrage, projection), clic pour y
   aller, double-clic pour renommer, gardées dans `vues.json` du dossier de configuration.
 - Panneau de l'outil actif en haut à gauche de la vue ; Échap revient à la sélection.
+
+## D-27 · STEP et IGES par OpenCASCADE 8.0.1, lié statiquement (09/11/2026)
+- OCCT construit depuis ses sources (étiquette `V8_0_1`) par `tools/occt.sh`, en bibliothèques statiques,
+  seulement les 25 boîtes à outils nécessaires (fermeture des dépendances de TKDESTEP, TKDEIGES, TKXCAF,
+  TKMesh), sans OpenGL, FreeType, Tcl/Tk ni autre tiers. Pourquoi : un seul exécutable, aucune DLL à livrer,
+  même code sous Windows, Linux et macOS. Écarté : paquets conda-forge (exécution d'outils tiers refusée
+  dans la session, DLL à livrer), crate `occt-sys` (sans le cadre applicatif ni XCAF : ni assemblages, ni
+  noms, ni couleurs).
+- Pont `cxx` (`crates/obv-cad`) : STEPCAFControl / IGESCAFControl vers un document XCAF, parcours des feuilles
+  par XCAFPrs_DocumentExplorer (instances, position globale, style hérité), couleurs par face par
+  XCAFPrs::CollectStyleSettings, chaque forme de référence maillée une fois (BRepMesh parallèle) puis copiée
+  par instance (ordre des sommets inversé sous une transformation miroir). Un matériau par couleur distincte.
+- Maillage par défaut : flèche 1/4 000 de la diagonale du modèle, angle 0,35 rad ; la conversion simplifie
+  ensuite à écart garanti (D-20).
+- `OCCT_DIR` donne l'installation ; sans elle, la lecture STEP / IGES est absente de la construction (message
+  clair à l'ouverture) ; `OBV_REQUIRE_OCCT` la rend obligatoire (CI et versions).
+- CI : OCCT construit une fois par système et gardé en cache (clé : empreinte de `tools/occt.sh`), sauvegardé
+  dès sa construction. Jeu d'essai STEP produit à la volée par OCCT (assemblage de deux cubes nommés, l'un
+  rouge), rien de versé au dépôt.
+- Licence OCCT : LGPL 2.1 avec exception ; textes livrés avec l'exécutable (question de distribution reportée,
+  D-11).
+
+## D-28 · Versions : brouillon préparé par la CI, publication par l'utilisateur (09/11/2026)
+- Flux « Version » (`.github/workflows/version.yml`, lancé à la main avec un numéro) : construction Windows
+  `--release` avec OCCT obligatoire, archive `Obview-3D-<version>-windows-x64.zip` (exécutable et licences),
+  brouillon de version GitHub `v<version>` créé par `gh release create --draft`. Aucune étiquette n'est créée
+  avant la publication.
+- Logo de l'application (tuile sombre, cube isométrique de l'icône « pièce ») : icône de l'exécutable
+  (ressource Windows) et de la fenêtre.

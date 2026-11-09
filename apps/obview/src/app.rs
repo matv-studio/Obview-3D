@@ -98,8 +98,24 @@ pub struct App {
     measure_at: Option<Vec2>,
 }
 
-fn load(path: &std::path::Path) -> Result<Model, String> {
-    obv_io::read(path).map_err(|e| e.to_string())
+/// Lit un fichier : STEP / IGES par OpenCASCADE (D-27), les maillages par les lecteurs d'Obview.
+pub fn load(path: &std::path::Path) -> Result<Model, String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if obv_cad::EXTENSIONS.contains(&ext.as_str()) {
+        obv_cad::read(path, obv_cad::Options::default()).map_err(|e| e.to_string())
+    } else {
+        obv_io::read(path).map_err(|e| e.to_string())
+    }
+}
+
+/// Extensions proposées à l'ouverture.
+pub fn extensions() -> Vec<&'static str> {
+    let mut v: Vec<&str> = Vec::new();
+    if obv_cad::available() {
+        v.extend_from_slice(obv_cad::EXTENSIONS);
+    }
+    v.extend_from_slice(obv_io::EXTENSIONS);
+    v
 }
 
 impl App {
@@ -207,7 +223,7 @@ impl App {
                 Request::OpenFile => {
                     let mut d = rfd::FileDialog::new()
                         .set_title("Ouvrir")
-                        .add_filter("Modèles 3D", obv_io::EXTENSIONS)
+                        .add_filter("Modèles 3D", &extensions())
                         .add_filter("Tous les fichiers", &["*"]);
                     if let Some(w) = &window {
                         d = d.set_parent(w.as_ref());
@@ -354,7 +370,8 @@ impl App {
         let attrs = Window::default_attributes()
             .with_title("Obview 3D")
             .with_inner_size(LogicalSize::new(1600.0, 900.0))
-            .with_min_inner_size(LogicalSize::new(960.0, 600.0));
+            .with_min_inner_size(LogicalSize::new(960.0, 600.0))
+            .with_window_icon(window_icon());
         let window = Arc::new(el.create_window(attrs).map_err(|e| e.to_string())?);
         let display = window.display_handle().map_err(|e| e.to_string())?.as_raw();
         let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();
@@ -825,4 +842,17 @@ fn write_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), 
     e.set_color(png::ColorType::Rgba);
     e.set_depth(png::BitDepth::Eight);
     e.write_header()?.write_image_data(rgba)
+}
+
+/// Icône de la fenêtre (logo 256 px intégré à l'exécutable).
+fn window_icon() -> Option<winit::window::Icon> {
+    let bytes: &[u8] = include_bytes!("../assets/obview-256.png");
+    let mut r = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().ok()?;
+    let mut buf = vec![0; r.output_buffer_size()?];
+    let info = r.next_frame(&mut buf).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    buf.truncate(info.buffer_size());
+    winit::window::Icon::from_rgba(buf, info.width, info.height).ok()
 }
