@@ -75,9 +75,11 @@ fn read_native(path: &Path, iges: bool, options: Options) -> Result<Model, CadEr
     // Un matériau par couleur distincte.
     let mut colors: Vec<[u32; 4]> = Vec::new();
     for (k, p) in r.parts.into_iter().enumerate() {
+        // Les modeleurs CAO ont Z vers le haut, Obview Y : rotation de -90° autour de X, (x, y, z) → (x, z, -y).
+        let up = |c: &[f32]| [c[0], c[2], -c[1]];
         let mut mesh = Mesh {
-            positions: p.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
-            normals: p.normals.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            positions: p.positions.chunks_exact(3).map(up).collect(),
+            normals: p.normals.chunks_exact(3).map(up).collect(),
             uvs: Vec::new(),
             indices: p.indices,
             submeshes: Vec::new(),
@@ -125,7 +127,9 @@ mod tests {
         for p in &m.parts {
             assert_eq!(p.mesh.triangle_count(), 12, "{}", p.name);
         }
+        // Z du fichier devenu Y : la hauteur du cube est en Y, sa profondeur en -Z.
         let (a, b) = (m.parts[0].mesh.bounds().unwrap(), m.parts[1].mesh.bounds().unwrap());
+        assert!((a.1[1] - a.0[1] - 10.0).abs() < 1e-4 && a.1[2] <= 1e-4, "{a:?}");
         assert!((b.0[0] - a.0[0] - 20.0).abs() < 1e-4, "{a:?} {b:?}");
         let names: Vec<&str> = m.parts.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Cube gauche", "Cube droit"]);

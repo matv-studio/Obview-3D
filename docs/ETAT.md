@@ -3,7 +3,7 @@
 Mis à jour : 09/11/2026.
 
 ## Fait
-- Décisions D-01 à D-26 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-28 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -45,10 +45,13 @@ Mis à jour : 09/11/2026.
   200–520 px) ; gizmo au choix : Axes (défaut), Cube, Trièdre, Aucun (D-25). Vérifié aussi en fenêtre réelle.
 - Outils (D-26) : perspective / orthographique, mesure avec accroche, coupe bouchée, vue éclatée, capture PNG
   (2×, 4K, fond transparent), onglet « Vues » (standard et enregistrées par fichier).
+- STEP / IGES par OpenCASCADE 8.0.1 statique (D-27) : noms, couleurs par face, instances ; montre réelle lue en
+  8,7 s (285 pièces). Flux de version Windows en brouillon (D-28), logo.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
-0. Lecture STEP / IGES (point 6) puis premier build (brouillon de version) ; barre d'activité de 2 px.
+0. Premier brouillon de version (flux « Version », D-28) ; barre d'activité de 2 px ; réglage de la finesse
+   du maillage STEP dans l'interface ; arbre d'assemblage (chemins lus, pas encore affichés).
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
 2. Fichiers récents ; menu contextuel de la vue (isoler, masquer, cadrer).
 3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie ;

@@ -100,6 +100,7 @@ Dépôt
   nom dans `crates/obv-ui/src/icon_list.rs`. Geist n'a ni U+202F ni U+2009 (espace synthétique dans `text.rs`).
 - Captures : `cargo test -p obview --test shell` (références dans `apps/obview/tests/reference`,
   `OBV_UPDATE_REFERENCE=1` pour les réécrire) ; fichier local à l'échelle 2 :
-  `OBV_SAMPLE_GLB=<fichier.glb> OBV_SELECT=<n> cargo test -p obview --test shell captures_fichier_local -- --ignored`.
+  `OBV_SAMPLE=<fichier> OBV_SELECT=<n> cargo test -p obview --test shell captures_fichier_local -- --ignored`
+  (tout format lisible, STEP compris avec `OCCT_DIR`).
   Images dans `target/tmp/rendus/`.
   Autre taille : `OBV_SIZE=2560x1440 OBV_SCALE=1 OBV_PANELS=1`.

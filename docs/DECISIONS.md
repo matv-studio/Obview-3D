@@ -284,7 +284,10 @@ survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser
   XCAFPrs::CollectStyleSettings, chaque forme de référence maillée une fois (BRepMesh parallèle) puis copiée
   par instance (ordre des sommets inversé sous une transformation miroir). Un matériau par couleur distincte.
 - Maillage par défaut : flèche 1/4 000 de la diagonale du modèle, angle 0,35 rad ; la conversion simplifie
-  ensuite à écart garanti (D-20).
+  ensuite à écart garanti (D-20). Montre `WSSA0089.stp` : 285 pièces, 463 049 triangles, lue et maillée en
+  8,7 s sur 2 cœurs (l'export Rhino du même modèle n'avait que 246 pièces).
+- Axe vertical : Z dans les modeleurs CAO, Y dans Obview ; rotation de -90° autour de X à la lecture.
+- Noms : celui de l'instance, sinon celui du produit (OCCT nomme « =>[0:1:1:n] » les instances anonymes).
 - `OCCT_DIR` donne l'installation ; sans elle, la lecture STEP / IGES est absente de la construction (message
   clair à l'ouverture) ; `OBV_REQUIRE_OCCT` la rend obligatoire (CI et versions).
 - CI : OCCT construit une fois par système et gardé en cache (clé : empreinte de `tools/occt.sh`), sauvegardé

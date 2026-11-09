@@ -404,14 +404,14 @@ fn conversion_deux_themes() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
-/// Captures sur un fichier local (`OBV_SAMPLE_GLB`), à l'échelle 2, sans référence : `cargo test -- --ignored`.
+/// Captures sur un fichier local (`OBV_SAMPLE`, tout format lisible), à l'échelle 2, sans référence : `cargo test -- --ignored`.
 #[test]
 #[ignore]
 fn captures_fichier_local() {
-    let Some(path) = std::env::var_os("OBV_SAMPLE_GLB") else { return };
+    let Some(path) = std::env::var_os("OBV_SAMPLE").or_else(|| std::env::var_os("OBV_SAMPLE_GLB")) else { return };
     let path = PathBuf::from(path);
     let t = std::time::Instant::now();
-    let model = obv_io::read_glb(&path).unwrap();
+    let model = obview::app::load(&path).unwrap();
     eprintln!(
         "lecture : {:.0} ms, {} pièces, {} triangles",
         t.elapsed().as_secs_f64() * 1000.0,

@@ -46,6 +46,7 @@ pub mod bridge {
 
         /// Écrit l'assemblage d'essai (deux instances nommées d'un cube de 10 mm, la seconde décalée de 20 mm
         /// en X et rouge) : jeu d'essai libre, produit à la volée plutôt que versé au dépôt.
+        #[allow(dead_code)]
         fn write_test_step(path: &str) -> bool;
     }
 }

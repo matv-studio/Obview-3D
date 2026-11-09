@@ -21,6 +21,9 @@
 #include <Bnd_Box.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <IGESCAFControl_Reader.hxx>
+#include <Message.hxx>
+#include <Message_Messenger.hxx>
+#include <Message_PrinterOStream.hxx>
 #include <Message_ProgressRange.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <Poly_Triangulation.hxx>
@@ -90,14 +93,15 @@ struct Prototype {
   std::vector<Group> groups;
 };
 
-Prototype mesh_prototype(const TDF_Label& ref, const TopoDS_Shape& shape, const XCAFPrs_Style& inherited) {
+// Les styles gardés sont ceux de la forme de référence : le style de l'instance s'applique à la copie.
+Prototype mesh_prototype(const TDF_Label& ref, const TopoDS_Shape& shape) {
   NCollection_IndexedDataMap<TopoDS_Shape, XCAFPrs_Style, TopTools_ShapeMapHasher> styles;
   XCAFPrs::CollectStyleSettings(ref, TopLoc_Location(), styles);
   // Style de chaque face : le sien, sinon celui d'un sous-ensemble qui la contient, sinon celui hérité.
   std::vector<std::pair<TopoDS_Face, XCAFPrs_Style>> faces;
   for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
     const TopoDS_Face& face = TopoDS::Face(ex.Current());
-    XCAFPrs_Style st = inherited;
+    XCAFPrs_Style st;
     for (int i = 1; i <= styles.Extent(); ++i) {
       const TopoDS_Shape& sub = styles.FindKey(i);
       bool contains = sub.IsSame(face);
@@ -204,6 +208,8 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options) {
   CadResult result;
   result.unit_m = 0.001;
   try {
+    // Pas de bavardage d'OpenCASCADE sur la sortie standard.
+    Message::DefaultMessenger()->RemovePrinters(STANDARD_TYPE(Message_PrinterOStream));
     const std::string file(path.data(), path.size());
     occ::handle<XCAFApp_Application> app = XCAFApp_Application::GetApplication();
     occ::handle<TDocStd_Document> doc;
@@ -259,21 +265,25 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options) {
           continue;
         }
         BRepMesh_IncrementalMesh mesher(shape, deflection, false, options.angular, true);
-        it = cache.emplace(key, mesh_prototype(node.RefLabel, shape, node.Style)).first;
+        it = cache.emplace(key, mesh_prototype(node.RefLabel, shape)).first;
       }
       const Prototype& proto = it->second;
       if (proto.indices.empty()) {
         continue;
       }
       CadPart part;
+      // Nom de l'instance, sinon du produit (OCCT nomme « =>[0:1:1:n] » les instances sans nom).
       std::string name = label_name(node.Label);
-      if (name.empty()) {
+      if (name.empty() || name.rfind("=>", 0) == 0) {
         name = label_name(node.RefLabel);
       }
       part.name = rust::String(name);
       std::string chain;
       for (int d = 0; d < ex.CurrentDepth(); ++d) {
-        const std::string n = label_name(ex.Current(d).Label);
+        std::string n = label_name(ex.Current(d).Label);
+        if (n.rfind("=>", 0) == 0) {
+          n = label_name(ex.Current(d).RefLabel);
+        }
         if (!n.empty()) {
           chain += chain.empty() ? n : " / " + n;
         }
@@ -310,9 +320,11 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options) {
         CadGroup cg;
         cg.first = g.first;
         cg.count = g.count;
-        cg.has_color = g.style.IsSetColorSurf();
+        // Couleur propre à la face, sinon celle de l'instance (héritée de l'assemblage).
+        const XCAFPrs_Style& own = g.style;
+        cg.has_color = own.IsSetColorSurf() || node.Style.IsSetColorSurf();
         if (cg.has_color) {
-          const Quantity_ColorRGBA& c = g.style.GetColorSurfRGBA();
+          const Quantity_ColorRGBA& c = own.IsSetColorSurf() ? own.GetColorSurfRGBA() : node.Style.GetColorSurfRGBA();
           double r = 0.0, gg = 0.0, b = 0.0;
           c.GetRGB().Values(r, gg, b, Quantity_TOC_RGB);
           cg.color = {static_cast<float>(r), static_cast<float>(gg), static_cast<float>(b), c.Alpha()};
