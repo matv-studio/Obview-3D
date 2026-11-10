@@ -48,7 +48,8 @@ cp -L "$sdk/lib/libvulkan.1.dylib" "$app/Contents/Frameworks/libvulkan.1.dylib"
 
 # Aucune dépendance hors du système : sinon l'application ne se lancerait que sur la machine de construction.
 for lib in "$app/Contents/Frameworks/"*.dylib "$app/Contents/MacOS/obview"; do
-  otool -L "$lib" | tail -n +2 | awk '{print $1}' | while read -r dep; do
+  # Dépendances : lignes en retrait (une bibliothèque universelle a un en-tête par architecture).
+  otool -L "$lib" | grep '^[[:space:]]' | awk '{print $1}' | while read -r dep; do
     case "$dep" in
       /usr/lib/*|/System/*|@rpath/libvulkan*|@loader_path/*|@executable_path/*) ;;
       *) if [ "$(basename "$dep")" != "$(basename "$lib")" ]; then
