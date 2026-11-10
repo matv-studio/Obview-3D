@@ -6,9 +6,10 @@
 #
 # Le dossier contient ensuite macOS/lib, macOS/bin et macOS/share/vulkan/icd.d (documentation macOS du SDK).
 set -euo pipefail
+# Compatible avec le bash 3.2 de macOS : pas d'apostrophe dans les ${…:?message}.
 
 version="${1:?version attendue}"
-root="${2:?dossier d'installation attendu}"
+root="${2:?dossier cible attendu}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 

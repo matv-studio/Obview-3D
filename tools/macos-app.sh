@@ -25,7 +25,8 @@ cp "$here/apps/obview/assets/obview.icns" "$app/Contents/Resources/obview.icns"
 # Pilote : la bibliothèque que désigne le manifeste du SDK, puis un manifeste qui pointe vers Frameworks.
 icd="$sdk/share/vulkan/icd.d/libkosmickrisp_icd.json"
 [ -f "$icd" ] || { echo "manifeste KosmicKrisp absent : $icd" >&2; exit 1; }
-driver="$(python3 - "$icd" "$sdk" <<'PY'
+# Script Python passé par -c : le bash 3.2 de macOS analyse mal un document en ligne dans $(…).
+driver="$(python3 -c '
 import json, os, sys
 icd, sdk = sys.argv[1], sys.argv[2]
 p = json.load(open(icd))["ICD"]["library_path"]
@@ -34,8 +35,7 @@ if "/" not in p:
 elif not os.path.isabs(p):
     p = os.path.normpath(os.path.join(os.path.dirname(icd), p))
 print(p)
-PY
-)"
+' "$icd" "$sdk")"
 [ -f "$driver" ] || { echo "pilote KosmicKrisp absent : $driver" >&2; exit 1; }
 cp -L "$driver" "$app/Contents/Frameworks/libvulkan_kosmickrisp.dylib"
 python3 - "$icd" "$app/Contents/Resources/vulkan/icd.d/libkosmickrisp_icd.json" <<'PY'
