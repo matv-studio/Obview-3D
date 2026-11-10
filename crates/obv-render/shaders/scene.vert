@@ -9,13 +9,13 @@ layout(location = 2) out flat uint v_color;
 layout(location = 3) out vec3 v_bary;
 
 void main() {
-    uint i = pc.indices.v[gl_VertexIndex];
-    uvec2 a = pc.attrs.v[i];
-    vec3 p = pc.positions.v[i] + pc.params.offsets[a.y].xyz;
-    v_normal = pc.normals.v[i];
+    uint i = INDEX(VERTEX_ID);
+    uvec2 a = ATTR(i);
+    vec3 p = POSITION(i) + PARAMS.offsets[a.y].xyz;
+    v_normal = NORMAL(i);
     v_world = p;
     v_color = a.x;
-    uint corner = uint(gl_VertexIndex) % 3u;
+    uint corner = uint(VERTEX_ID) % 3u;
     v_bary = vec3(corner == 0u, corner == 1u, corner == 2u);
-    gl_Position = pc.view_proj * vec4(p, 1.0);
+    gl_Position = clip_position(pc.view_proj * vec4(p, 1.0));
 }

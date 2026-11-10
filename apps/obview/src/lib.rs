@@ -4,6 +4,7 @@ pub mod app;
 pub mod convert_ui;
 pub mod demo;
 pub mod frame;
+pub mod gfx;
 pub mod gizmo;
 pub mod inspector;
 pub mod lang;

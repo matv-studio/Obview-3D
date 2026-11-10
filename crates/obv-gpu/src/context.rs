@@ -79,6 +79,23 @@ unsafe extern "system" fn debug_callback(
     vk::FALSE
 }
 
+/// Chargeur Vulkan : sous macOS, celui de l'application (`Contents/Frameworks`), qui trouve le pilote KosmicKrisp
+/// livré dans `Contents/Resources/vulkan/icd.d` (D-30) ; sinon celui du système.
+fn load_entry() -> Result<ash::Entry> {
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.parent()?.join("Frameworks"))) {
+        let path = dir.join("libvulkan.1.dylib");
+        // SAFETY: chargement du chargeur Vulkan livré avec l'application.
+        if path.exists()
+            && let Ok(entry) = unsafe { ash::Entry::load_from(&path) }
+        {
+            return Ok(entry);
+        }
+    }
+    // SAFETY: chargement de la bibliothèque Vulkan du système.
+    Ok(unsafe { ash::Entry::load()? })
+}
+
 fn score(props: &vk::PhysicalDeviceProperties) -> u32 {
     match props.device_type {
         vk::PhysicalDeviceType::DISCRETE_GPU => 4,
@@ -93,8 +110,7 @@ impl Gpu {
     /// Crée l'instance et l'appareil. Choisit la carte la plus puissante qui offre Vulkan 1.3 et les fonctions
     /// requises ; la variable `OBV_GPU` (sous-chaîne du nom) force un appareil.
     pub fn new(desc: &GpuDesc) -> Result<Self> {
-        // SAFETY: chargement de la bibliothèque Vulkan du système.
-        let entry = unsafe { ash::Entry::load()? };
+        let entry = load_entry()?;
 
         let layers = unsafe { entry.enumerate_instance_layer_properties()? };
         let has_validation =

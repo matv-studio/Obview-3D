@@ -39,7 +39,7 @@ pub struct Band {
 impl Band {
     /// Toute la vue.
     pub const ALL: Band = Band { normal: [0.0, 0.0], lo: -1.0, hi: 1.0 };
-    fn raw(self) -> [f32; 4] {
+    pub fn raw(self) -> [f32; 4] {
         [self.normal[0], self.normal[1], self.lo, self.hi]
     }
 }
@@ -353,9 +353,42 @@ struct ParamRing {
     pick: Buffer,
     next: usize,
     current: u64,
+    data: ParamsData,
+}
+
+/// Coupe et décalages de l'image (dans l'ordre du tracé).
+#[derive(Default)]
+struct ParamsData {
     section: Option<[f32; 4]>,
-    /// Décalages dans l'ordre du tracé.
     offsets: Vec<[f32; 4]>,
+}
+
+impl ParamsData {
+    fn new(p: &SceneParams<'_>, ids: &[u32]) -> Self {
+        let offsets = ids
+            .iter()
+            .map(|&id| p.offsets.get(id as usize).map(|o| [o[0], o[1], o[2], 0.0]).unwrap_or([0.0; 4]))
+            .collect();
+        ParamsData { section: p.section, offsets }
+    }
+
+    fn encode(&self, camera: &Camera) -> Vec<u8> {
+        let eye = camera.eye();
+        let f = camera.forward();
+        let header = ParamsHeader {
+            eye: [eye[0] as f32, eye[1] as f32, eye[2] as f32],
+            ortho: camera.ortho as u32,
+            forward: [f[0] as f32, f[1] as f32, f[2] as f32],
+            flags: self.section.is_some() as u32,
+            plane: self.section.unwrap_or([0.0, 0.0, 0.0, 0.0]),
+        };
+        let mut bytes = bytemuck::bytes_of(&header).to_vec();
+        if self.offsets.is_empty() {
+            bytes.extend_from_slice(&[0u8; 16]);
+        }
+        bytes.extend_from_slice(bytemuck::cast_slice(&self.offsets));
+        bytes
+    }
 }
 
 #[repr(C)]
@@ -500,14 +533,9 @@ impl SceneRenderer {
     /// Paramètres de l'image (œil, projection, coupe, éclatement), à donner avant les tracés de chaque image.
     pub fn set_params(&self, camera: &Camera, p: &SceneParams<'_>) -> Result<()> {
         let ids: Vec<u32> = self.geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
-        let offsets: Vec<[f32; 4]> = ids
-            .iter()
-            .map(|&id| p.offsets.get(id as usize).map(|o| [o[0], o[1], o[2], 0.0]).unwrap_or([0.0; 4]))
-            .collect();
         let mut ring = self.params.borrow_mut();
-        ring.section = p.section;
-        ring.offsets = offsets;
-        let bytes = ring.encode(camera);
+        ring.data = ParamsData::new(p, &ids);
+        let bytes = ring.data.encode(camera);
         let k = ring.next;
         ring.next = (k + 1) % PARAM_SLOTS;
         if ring.slots[k].size < bytes.len() as u64 {
@@ -525,44 +553,27 @@ impl SceneRenderer {
     /// Remplace la géométrie affichée (tout est réuni dans un tampon par attribut). Les paramètres de l'image
     /// sont remis à zéro (sans coupe ni décalage) jusqu'au prochain [`Self::set_params`].
     pub fn set_meshes(&mut self, meshes: &[MeshInput<'_>]) -> Result<()> {
-        let mut pos = Vec::new();
-        let mut nrm = Vec::new();
-        let mut idx = Vec::new();
-        let mut attrs: Vec<[u32; 2]> = Vec::new();
-        let mut ranges = Vec::with_capacity(meshes.len());
-        let mut segs: Vec<[f32; 3]> = Vec::new();
-        let mut seg_parts: Vec<u32> = Vec::new();
-        for (k, m) in meshes.iter().enumerate() {
-            segs.extend_from_slice(m.edges);
-            seg_parts.extend(std::iter::repeat_n(k as u32, m.edges.len() / 4));
-            ranges.push(((idx.len() / 3) as u32, m.id));
-            let base = pos.len() as u32;
-            pos.extend_from_slice(m.positions);
-            nrm.extend_from_slice(m.normals);
-            attrs.extend(std::iter::repeat_n([u32::from_le_bytes(m.color), k as u32], m.positions.len()));
-            idx.extend(m.indices.iter().map(|i| i + base));
-        }
-        if idx.is_empty() {
+        let Some(a) = GeometryArrays::new(meshes) else {
             self.geometry = None;
             return Ok(());
-        }
+        };
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
         self.geometry = Some(Geometry {
-            positions: Buffer::with_data(&self.gpu, "positions", bytemuck::cast_slice(&pos), usage)?,
-            normals: Buffer::with_data(&self.gpu, "normales", bytemuck::cast_slice(&nrm), usage)?,
-            indices: Buffer::with_data(&self.gpu, "indices", bytemuck::cast_slice(&idx), usage)?,
-            attrs: Buffer::with_data(&self.gpu, "attributs", bytemuck::cast_slice(&attrs), usage)?,
-            index_count: idx.len() as u32,
-            edges: if segs.is_empty() {
+            positions: Buffer::with_data(&self.gpu, "positions", bytemuck::cast_slice(&a.positions), usage)?,
+            normals: Buffer::with_data(&self.gpu, "normales", bytemuck::cast_slice(&a.normals), usage)?,
+            indices: Buffer::with_data(&self.gpu, "indices", bytemuck::cast_slice(&a.indices), usage)?,
+            attrs: Buffer::with_data(&self.gpu, "attributs", bytemuck::cast_slice(&a.attrs), usage)?,
+            index_count: a.indices.len() as u32,
+            edges: if a.edges.is_empty() {
                 None
             } else {
                 Some((
-                    Buffer::with_data(&self.gpu, "arêtes", bytemuck::cast_slice(&segs), usage)?,
-                    Buffer::with_data(&self.gpu, "pièces des arêtes", bytemuck::cast_slice(&seg_parts), usage)?,
+                    Buffer::with_data(&self.gpu, "arêtes", bytemuck::cast_slice(&a.edges), usage)?,
+                    Buffer::with_data(&self.gpu, "pièces des arêtes", bytemuck::cast_slice(&a.edge_parts), usage)?,
                 ))
             },
-            edge_count: (segs.len() / 4) as u32,
-            ranges,
+            edge_count: (a.edges.len() / 4) as u32,
+            ranges: a.ranges,
         });
         self.set_params(&Camera::default(), &SceneParams::default())
     }
@@ -620,7 +631,7 @@ impl SceneRenderer {
         let d = self.gpu.device();
         let view_proj = camera.view_proj((w / h) as f64);
         let params = self.current_params();
-        let sectioned = self.params.borrow().section.is_some();
+        let sectioned = self.params.borrow().data.section.is_some();
         let push = Push {
             view_proj,
             positions: g.positions.address,
@@ -681,7 +692,7 @@ impl SceneRenderer {
         let view_proj = camera.view_proj_region(aspect, [cx, cy], [size[0] as f64, size[1] as f64]);
         let params = {
             let mut ring = self.params.borrow_mut();
-            let bytes = ring.encode(camera);
+            let bytes = ring.data.encode(camera);
             if ring.pick.size < bytes.len() as u64 {
                 ring.pick = ParamRing::slot(&self.gpu, bytes.len())?;
             }
@@ -800,29 +811,124 @@ impl SceneRenderer {
         })?;
         let bytes = t.readback.mapped().expect("tampon de relecture non projeté");
         let word = |i: usize| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
-        let (triangle, hit, depth) = (word(0), word(1), f32::from_bits(word(2)) as f64);
-        if hit == 0 || (depth <= 0.0 && !camera.ortho) {
-            return Ok(None);
-        }
-        let k = g.ranges.partition_point(|(first, _)| *first <= triangle).saturating_sub(1);
-        let (first, id) = g.ranges[k];
-        // Point du pixel à la profondeur lue, par la matrice inverse (perspective comme orthographique).
-        let Some(mut position) = camera.unproject(aspect, [cx, cy, depth]) else { return Ok(None) };
-        // Bouchon de coupe : le point vu est sur le plan, le long du rayon du pixel.
-        if hit == 2
-            && let Some(plane) = self.params.borrow().section
-            && let Some(near) = camera.unproject(aspect, [cx, cy, 1.0])
-        {
-            let n = [plane[0] as f64, plane[1] as f64, plane[2] as f64];
-            let r = [position[0] - near[0], position[1] - near[1], position[2] - near[2]];
-            let den = dot(n, r);
-            if den.abs() > 1e-300 {
-                let s = (plane[3] as f64 - dot(n, position)) / den;
-                position = [position[0] + r[0] * s, position[1] + r[1] * s, position[2] + r[2] * s];
-            }
-        }
-        Ok(Some(Pick { id, triangle: triangle - first, position }))
+        let read = PickRead { triangle: word(0), hit: word(1), depth: f32::from_bits(word(2)) as f64 };
+        Ok(resolve_pick(camera, size, pixel, read, &g.ranges, self.params.borrow().data.section))
     }
+}
+
+/// Lecture brute du pixel de sélection : triangle (ordre du tracé), marqueur (0 rien, 1 face, 2 bouchon de
+/// coupe), profondeur (convention de Vulkan : 0 à 1, inversée).
+#[derive(Clone, Copy, Debug)]
+pub struct PickRead {
+    pub triangle: u32,
+    pub hit: u32,
+    pub depth: f64,
+}
+
+/// Coordonnées normalisées du centre du pixel `pixel` d'une vue `size` (pixels de la cible).
+pub fn pick_ndc(size: [f32; 2], pixel: [f32; 2]) -> (f64, f64) {
+    (2.0 * (pixel[0] as f64 + 0.5) / size[0] as f64 - 1.0, 1.0 - 2.0 * (pixel[1] as f64 + 0.5) / size[1] as f64)
+}
+
+/// Pièce, triangle et point du monde d'une lecture de sélection (commun à tous les moteurs). `ranges` : premier
+/// triangle et identifiant de chaque pièce dans l'ordre du tracé.
+pub fn resolve_pick(
+    camera: &Camera,
+    size: [f32; 2],
+    pixel: [f32; 2],
+    read: PickRead,
+    ranges: &[(u32, u32)],
+    section: Option<[f32; 4]>,
+) -> Option<Pick> {
+    let PickRead { triangle, hit, depth } = read;
+    if hit == 0 || (depth <= 0.0 && !camera.ortho) || ranges.is_empty() {
+        return None;
+    }
+    let aspect = (size[0] / size[1]) as f64;
+    let (cx, cy) = pick_ndc(size, pixel);
+    let k = ranges.partition_point(|(first, _)| *first <= triangle).saturating_sub(1);
+    let (first, id) = ranges[k];
+    // Point du pixel à la profondeur lue, par la matrice inverse (perspective comme orthographique).
+    let mut position = camera.unproject(aspect, [cx, cy, depth])?;
+    // Bouchon de coupe : le point vu est sur le plan, le long du rayon du pixel.
+    if hit == 2
+        && let Some(plane) = section
+        && let Some(near) = camera.unproject(aspect, [cx, cy, 1.0])
+    {
+        let n = [plane[0] as f64, plane[1] as f64, plane[2] as f64];
+        let r = [position[0] - near[0], position[1] - near[1], position[2] - near[2]];
+        let den = dot(n, r);
+        if den.abs() > 1e-300 {
+            let s = (plane[3] as f64 - dot(n, position)) / den;
+            position = [position[0] + r[0] * s, position[1] + r[1] * s, position[2] + r[2] * s];
+        }
+    }
+    Some(Pick { id, triangle: triangle - first, position })
+}
+
+/// Géométrie de la scène en tableaux plats, commune aux moteurs : sommets de toutes les pièces à la suite,
+/// attributs par sommet (couleur, rang de la pièce), indices décalés, arêtes et leur pièce.
+pub struct GeometryArrays {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+    pub attrs: Vec<[u32; 2]>,
+    /// Premier triangle et identifiant de chaque pièce.
+    pub ranges: Vec<(u32, u32)>,
+    /// Quatre vecteurs par arête (extrémités, normales des faces).
+    pub edges: Vec<[f32; 3]>,
+    pub edge_parts: Vec<u32>,
+}
+
+impl GeometryArrays {
+    /// `None` : rien à tracer.
+    pub fn new(meshes: &[MeshInput<'_>]) -> Option<Self> {
+        let mut a = GeometryArrays {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            indices: Vec::new(),
+            attrs: Vec::new(),
+            ranges: Vec::with_capacity(meshes.len()),
+            edges: Vec::new(),
+            edge_parts: Vec::new(),
+        };
+        for (k, m) in meshes.iter().enumerate() {
+            a.edges.extend_from_slice(m.edges);
+            a.edge_parts.extend(std::iter::repeat_n(k as u32, m.edges.len() / 4));
+            a.ranges.push(((a.indices.len() / 3) as u32, m.id));
+            let base = a.positions.len() as u32;
+            a.positions.extend_from_slice(m.positions);
+            a.normals.extend_from_slice(m.normals);
+            a.attrs.extend(std::iter::repeat_n([u32::from_le_bytes(m.color), k as u32], m.positions.len()));
+            a.indices.extend(m.indices.iter().map(|i| i + base));
+        }
+        (!a.indices.is_empty()).then_some(a)
+    }
+}
+
+/// Paramètres de l'image encodés comme les lisent les nuanceurs (en-tête de 48 octets puis un décalage par
+/// pièce, dans l'ordre du tracé ; `ids` : identifiant de chaque pièce tracée).
+pub fn encode_params(camera: &Camera, p: &SceneParams<'_>, ids: &[u32]) -> Vec<u8> {
+    ParamsData::new(p, ids).encode(camera)
+}
+
+/// Sources OpenGL 4.30 des nuanceurs (moteur de secours, D-30), produites par `build.rs`.
+pub mod gl_src {
+    macro_rules! gl {
+        ($name:literal) => {
+            include_str!(concat!(env!("OUT_DIR"), "/", $name, ".gl"))
+        };
+    }
+    pub const SCENE_VERT: &str = gl!("scene.vert");
+    pub const SCENE_FRAG: &str = gl!("scene.frag");
+    pub const SECTION_FRAG: &str = gl!("scene_section.frag");
+    pub const XRAY_FRAG: &str = gl!("xray.frag");
+    pub const EDGES_VERT: &str = gl!("edges.vert");
+    pub const EDGES_FRAG: &str = gl!("edges.frag");
+    pub const PICK_VERT: &str = gl!("pick.vert");
+    pub const PICK_FRAG: &str = gl!("pick.frag");
+    pub const BACKGROUND_VERT: &str = gl!("background.vert");
+    pub const BACKGROUND_FRAG: &str = gl!("background.frag");
 }
 
 impl ParamRing {
@@ -841,24 +947,6 @@ impl ParamRing {
         let slots = (0..PARAM_SLOTS).map(|_| Self::slot(gpu, size)).collect::<Result<Vec<_>>>()?;
         let pick = Self::slot(gpu, size)?;
         let current = slots[0].address;
-        Ok(ParamRing { slots, pick, next: 0, current, section: None, offsets: Vec::new() })
-    }
-
-    fn encode(&self, camera: &Camera) -> Vec<u8> {
-        let eye = camera.eye();
-        let f = camera.forward();
-        let header = ParamsHeader {
-            eye: [eye[0] as f32, eye[1] as f32, eye[2] as f32],
-            ortho: camera.ortho as u32,
-            forward: [f[0] as f32, f[1] as f32, f[2] as f32],
-            flags: self.section.is_some() as u32,
-            plane: self.section.unwrap_or([0.0, 0.0, 0.0, 0.0]),
-        };
-        let mut bytes = bytemuck::bytes_of(&header).to_vec();
-        if self.offsets.is_empty() {
-            bytes.extend_from_slice(&[0u8; 16]);
-        }
-        bytes.extend_from_slice(bytemuck::cast_slice(&self.offsets));
-        bytes
+        Ok(ParamRing { slots, pick, next: 0, current, data: ParamsData::default() })
     }
 }

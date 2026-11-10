@@ -82,6 +82,8 @@ pub struct AppState {
     pub drop_hover: bool,
     /// Avis d'échec affiché en haut de la vue.
     pub notice: Option<crate::loading::Notice>,
+    /// Moteur de rendu actif et sa description (réglages).
+    pub renderer: (crate::gfx::Backend, String),
     /// Boîte englobante du modèle (unités du fichier).
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
     /// Rectangle de la vue 3D après la dernière mise en page (pixels logiques).
@@ -157,6 +159,7 @@ impl AppState {
             loading: None,
             drop_hover: false,
             notice: None,
+            renderer: (crate::gfx::Backend::Vulkan, String::new()),
             viewport: Rc::new(Cell::new(Rect::ZERO)),
             stage: Rc::new(Cell::new(Rect::ZERO)),
             grip_press: None,

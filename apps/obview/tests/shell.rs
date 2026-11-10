@@ -98,10 +98,38 @@ fn check_reference(name: &str, w: u32, h: u32, rgba: &[u8]) {
 /// Rend une capture : une image pour la mise en page, puis le survol éventuel, puis l'image finale.
 fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8> {
     let (w, h) = shot.size;
+    let (mut ui, state, accent) = prepare(model, file_name, shot);
+    let mut f = OffscreenFrame::new(gpu, w, h).unwrap();
+    f.set_model(model, &state, accent).unwrap();
+    f.render(&mut ui, &state).unwrap()
+}
+
+/// Même image par le moteur OpenGL (sans fenêtre, EGL) ; `None` si OpenGL 4.3 manque.
+#[cfg(target_os = "linux")]
+fn capture_gl(model: &Model, file_name: &str, shot: &Shot<'_>) -> Option<Vec<u8>> {
+    let (w, h) = shot.size;
+    let mut f = match obview::frame::GlOffscreenFrame::new(w, h) {
+        Ok(f) => f,
+        Err(e) => {
+            assert!(std::env::var_os("OBV_REQUIRE_GL").is_none(), "OpenGL sans fenêtre exigé (OBV_REQUIRE_GL) : {e}");
+            eprintln!("OpenGL sans fenêtre indisponible : {e}");
+            return None;
+        }
+    };
+    let (mut ui, state, accent) = prepare(model, file_name, shot);
+    f.set_model(model, &state, accent).unwrap();
+    Some(f.render(&mut ui, &state))
+}
+
+/// Interface et état après les clics et survols du cliché ; couleur de sélection en sRGB 8 bits.
+fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState, [u8; 4]) {
+    let (w, h) = shot.size;
     let logical = vec2(w as f32 / shot.scale, h as f32 / shot.scale);
     let mut state = AppState::new(file_name, model);
     state.settings.theme = if shot.theme == ThemeKind::Dark { ThemeChoice::Dark } else { ThemeChoice::Light };
     state.selected = shot.select;
+    // Texte fixe : les références ne dépendent pas de la version de Mesa.
+    state.renderer = (obview::gfx::Backend::Vulkan, "Vulkan 1.4 · llvmpipe".into());
     (shot.setup)(&mut state);
     let mut ui = Ui::new(shell::theme(&state));
     let frame = |ui: &mut Ui, state: &mut AppState, time: f64, pointer, down: bool| {
@@ -140,12 +168,10 @@ fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8
         frame(&mut ui, &mut state, t + 1.5, pointer, false);
         frame(&mut ui, &mut state, t + 2.5, pointer, false);
     }
-    let mut f = OffscreenFrame::new(gpu, w, h).unwrap();
     let a = shell::selection_color(&ui.theme);
     let to8 =
         |c: f32| (if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 } * 255.0).round() as u8;
-    f.set_model(model, &state, [to8(a.r), to8(a.g), to8(a.b), 255]).unwrap();
-    f.render(&mut ui, &state).unwrap()
+    (ui, state, [to8(a.r), to8(a.g), to8(a.b), 255])
 }
 
 fn shoot(gpu: &Gpu, model: &Model, shots: &[Shot<'_>]) {
@@ -491,6 +517,72 @@ fn transitions() {
     let bands = Shot { name: "transition_rendu", clicks: &*RENDER, settle: 0.17, ..Default::default() };
     let panel = Shot { name: "transition_panneau", select: Some(1), clicks: &*GRIP, settle: 0.1, ..Default::default() };
     shoot(&gpu, &model, &[bands, panel]);
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Moteur OpenGL de secours (D-30) : chaque écran rendu par OpenGL (llvmpipe) et par Vulkan (lavapipe) donne la
+/// même image, à l'arrondi près (écart moyen sous 0,5 niveau, 99,9 % des pixels à 8 niveaux au plus).
+#[test]
+#[cfg(target_os = "linux")]
+fn opengl_comme_vulkan() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    static RENDER: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("rendu")]);
+    let shots = [
+        Shot {
+            name: "gl_coque",
+            select: Some(1),
+            setup: |s| {
+                s.left_open = true;
+                s.right_open = true;
+            },
+            ..Default::default()
+        },
+        Shot { name: "gl_bandes", theme: ThemeKind::Light, clicks: &*RENDER, ..Default::default() },
+        Shot {
+            name: "gl_coupe",
+            setup: |s| {
+                s.tool = shell::Tool::Section;
+            },
+            ..Default::default()
+        },
+        Shot {
+            name: "gl_aretes",
+            setup: |s| {
+                s.inspector = obview::inspector::Inspector::Single(obv_render::RenderMode::Edges);
+            },
+            ..Default::default()
+        },
+        Shot {
+            name: "gl_rayons_x",
+            setup: |s| {
+                s.inspector = obview::inspector::Inspector::Single(obv_render::RenderMode::XRay);
+            },
+            ..Default::default()
+        },
+        Shot {
+            name: "gl_ortho_eclatee",
+            setup: |s| {
+                s.camera.ortho = true;
+                s.explode = 0.6;
+            },
+            ..Default::default()
+        },
+        Shot { name: "gl_reglages", setup: |s| s.settings_open = true, ..Default::default() },
+    ];
+    for shot in &shots {
+        let vk = capture(&gpu, &model, "support.step", shot);
+        let Some(gl) = capture_gl(&model, "support.step", shot) else { return };
+        save_png(&out_dir().join(format!("{}_vulkan.png", shot.name)), shot.size.0, shot.size.1, &vk);
+        save_png(&out_dir().join(format!("{}_opengl.png", shot.name)), shot.size.0, shot.size.1, &gl);
+        let diffs: Vec<u8> = vk.iter().zip(&gl).map(|(a, b)| a.abs_diff(*b)).collect();
+        let mean = diffs.iter().map(|d| *d as f64).sum::<f64>() / diffs.len() as f64;
+        let mut px: Vec<u8> = diffs.chunks(4).map(|c| *c.iter().max().unwrap()).collect();
+        px.sort_unstable();
+        let p999 = px[px.len() * 999 / 1000];
+        eprintln!("{} : écart moyen {mean:.3}, 99,9 % ≤ {p999}", shot.name);
+        assert!(mean < 0.5 && p999 <= 8, "{} : OpenGL diffère de Vulkan (moyen {mean:.3}, 99,9 % {p999})", shot.name);
+    }
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 

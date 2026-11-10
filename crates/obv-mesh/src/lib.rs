@@ -105,12 +105,17 @@ pub fn convert(
     opts: ConvertOptions,
     progress: &(dyn Fn(f32) + Sync),
 ) -> std::io::Result<Report> {
-    let (out, mut report) = optimize_model(model, opts.tolerance_m, opts.keep_silhouette, &|f| progress(f * 0.9));
+    // Écart garanti partagé quand les positions seront quantifiées (GLB compressé) : 90 % à la simplification,
+    // 10 % à la quantification ; leur somme reste dans l'écart demandé (D-30).
+    let quantized = opts.format == Format::Glb && opts.compression != Compression::None;
+    let share = if quantized { 0.9 } else { 1.0 };
+    let (out, mut report) =
+        optimize_model(model, opts.tolerance_m * share, opts.keep_silhouette, &|f| progress(f * 0.9));
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "modele".into());
     let wopts = WriteOptions {
         format: opts.format,
         compression: opts.compression,
-        tolerance: (opts.tolerance_m / model.unit_m) as f32,
+        tolerance: if quantized { (opts.tolerance_m * (1.0 - share) / model.unit_m) as f32 } else { 0.0 },
     };
     let files = encode(&out, wopts, &stem);
     report.bytes = files.iter().map(|f| f.data.len()).sum();

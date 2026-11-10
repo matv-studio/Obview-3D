@@ -12,27 +12,26 @@ use std::{
     time::Instant,
 };
 
-use obv_gpu::{FRAMES_IN_FLIGHT, Gpu, GpuDesc, PresentMode, Swapchain};
 use obv_io::{Model, Progress, Stage};
-use obv_render::{Camera, SceneRenderer};
-use obv_ui::{Cursor, FrameInput, Id, Key, Modifiers, Ui, Vec2, gpu::UiRenderer, tr, vec2};
+use obv_render::Camera;
+use obv_ui::{Cursor, FrameInput, Id, Key, Modifiers, Ui, Vec2, tr, vec2};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, NamedKey, PhysicalKey},
-    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{CursorIcon, Theme as WinTheme, Window, WindowId},
 };
 
 use crate::{
     convert_ui::{Request, Status},
-    frame::{self, EdgeCache, SceneKey, draw_viewport, mesh_inputs},
+    frame::{EdgeCache, SceneKey, mesh_inputs},
+    gfx::Gfx,
     inspector::{self, Inspector},
     loading::{Loading, Notice},
     navigation::{NavContext, Navigator, WHEEL_NOTCH_PX},
-    settings::Settings,
+    settings::{RendererChoice, Settings},
     shell::{self, AppState, Tool},
     tools::{self, CaptureSize, MeasurePoint, Snap},
     views::ViewStore,
@@ -54,15 +53,6 @@ struct Pending {
     text: String,
     keys: Vec<Key>,
     held: HashSet<Key>,
-}
-
-/// Ressources graphiques. Ordre des champs = ordre de libération : la chaîne d'échange avant la fenêtre.
-struct Gfx {
-    swapchain: Swapchain,
-    scene: SceneRenderer,
-    ui_renderer: UiRenderer,
-    window: Arc<Window>,
-    gpu: Gpu,
 }
 
 /// Réveil de la boucle d'événements par un fil de travail.
@@ -104,6 +94,8 @@ pub struct App {
     measure_at: Option<Vec2>,
     /// Dernier clic dans la vue : instant et pièce touchée (double-clic).
     last_click: Option<(f64, Option<usize>)>,
+    /// Choix de moteur appliqué à la fenêtre actuelle.
+    applied_renderer: RendererChoice,
     /// Appuis gauches reçus dans l'image de l'appui en cours.
     press_burst: u8,
 }
@@ -167,6 +159,7 @@ impl App {
             measure_at: None,
             last_click: None,
             press_burst: 0,
+            applied_renderer: RendererChoice::Auto,
         };
         app.state.views.list = app.views.0.get(&app.file_key).cloned().unwrap_or_default();
         if let Some(p) = path {
@@ -214,6 +207,7 @@ impl App {
         s.system_dark = self.state.system_dark;
         s.viewport = self.state.viewport.clone();
         s.inspector = self.state.inspector;
+        s.renderer = self.state.renderer.clone();
         self.file_key = std::fs::canonicalize(&path).unwrap_or(path).to_string_lossy().into_owned();
         s.views.list = self.views.0.get(&self.file_key).cloned().unwrap_or_default();
         self.state = s;
@@ -372,22 +366,15 @@ impl App {
             _ => size.pixels(vw, vh),
         };
         let accent = to_srgb8(shell::selection_color(&self.ui.theme));
-        let rgba = frame::capture(&gfx.gpu, &self.model, &self.state, &self.ui.theme, accent, w, h, transparent)
-            .map_err(|e| e.to_string())?;
+        let rgba = gfx.capture(&self.model, &self.state, &self.ui.theme, accent, w, h, transparent)?;
         write_png(path, w, h, &rgba).map_err(|e| e.to_string())
     }
 
     /// Point de mesure sous le pointeur, avec accroche aux sommets (10 px) puis aux arêtes (8 px).
-    fn measure_point(
-        scene: &SceneRenderer,
-        model: &Model,
-        state: &AppState,
-        scale: f32,
-        p: Vec2,
-    ) -> Option<(MeasurePoint, Snap)> {
+    fn measure_point(gfx: &Gfx, model: &Model, state: &AppState, scale: f32, p: Vec2) -> Option<(MeasurePoint, Snap)> {
         let view = state.viewport.get();
         let px = [(p.x - view.min.x) * scale, (p.y - view.min.y) * scale];
-        let hit = scene.pick(&state.camera, [view.width() * scale, view.height() * scale], px).ok()??;
+        let hit = gfx.pick(&state.camera, [view.width() * scale, view.height() * scale], px)?;
         let part = hit.id as usize;
         let offsets = tools::explode_offsets(state);
         let o = offsets.get(part).copied().unwrap_or([0.0; 3]);
@@ -456,25 +443,67 @@ impl App {
             .with_inner_size(LogicalSize::new(1600.0, 900.0))
             .with_min_inner_size(LogicalSize::new(960.0, 600.0))
             .with_window_icon(window_icon());
-        let window = Arc::new(el.create_window(attrs).map_err(|e| e.to_string())?);
-        let display = window.display_handle().map_err(|e| e.to_string())?.as_raw();
-        let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();
-        let exts = obv_gpu::required_instance_extensions(display).map_err(|e| e.to_string())?;
+        self.create_gfx(el, attrs)
+    }
+
+    /// Moteur choisi : réglage, sauf `--gl` / `--vulkan` ou `OBV_RENDERER` (essais).
+    fn renderer_choice(&self) -> RendererChoice {
+        let args: Vec<String> = std::env::args().collect();
+        let env = std::env::var("OBV_RENDERER").unwrap_or_default().to_ascii_lowercase();
+        if args.iter().any(|a| a == "--gl") || env == "gl" || env == "opengl" {
+            RendererChoice::OpenGl
+        } else if args.iter().any(|a| a == "--vulkan") || env == "vulkan" {
+            RendererChoice::Vulkan
+        } else {
+            self.state.settings.renderer
+        }
+    }
+
+    fn create_gfx(&mut self, el: &ActiveEventLoop, attrs: winit::window::WindowAttributes) -> Result<(), String> {
         let validation = std::env::args().any(|a| a == "--validation");
-        let gpu = Gpu::new(&GpuDesc { validation, instance_extensions: exts, presentation: true })
-            .map_err(|e| e.to_string())?;
-        let size = window.inner_size();
-        // SAFETY: la fenêtre vit dans `Gfx` aussi longtemps que la chaîne d'échange (ordre des champs).
-        let swapchain = unsafe {
-            Swapchain::new(&gpu, display, handle, (size.width, size.height), PresentMode::LowLatency)
-                .map_err(|e| e.to_string())?
-        };
-        let scene = SceneRenderer::new(&gpu, swapchain.format, swapchain.depth_format).map_err(|e| e.to_string())?;
-        let ui_renderer = UiRenderer::new(&gpu, swapchain.format, Some(swapchain.depth_format), 2048, FRAMES_IN_FLIGHT)
-            .map_err(|e| e.to_string())?;
-        self.state.system_dark = window.theme().is_none_or(|t| t == WinTheme::Dark);
-        self.gfx = Some(Gfx { gpu, window, swapchain, scene, ui_renderer });
+        let choice = self.renderer_choice();
+        let (gfx, failed) = Gfx::create(el, attrs, choice, validation)?;
+        if let Some(e) = failed {
+            self.state.notice = Some(Notice {
+                title: if choice == RendererChoice::OpenGl { "OpenGL indisponible" } else { "Vulkan indisponible" },
+                subject: gfx.description.clone(),
+                detail: e,
+            });
+        }
+        self.state.system_dark = gfx.window.theme().is_none_or(|t| t == WinTheme::Dark);
+        self.state.renderer = (gfx.backend, gfx.description.clone());
+        self.applied_renderer = self.state.settings.renderer;
+        self.gfx = Some(gfx);
+        // Nouveau moteur : atlas et géométrie à renvoyer.
+        let size = self.ui.atlas.size;
+        self.ui.atlas.dirty = Some([0, 0, size, size]);
+        self.scene_key = None;
         Ok(())
+    }
+
+    /// Change de moteur sans redémarrer : la fenêtre est recréée à la même place et à la même taille.
+    fn switch_renderer(&mut self, el: &ActiveEventLoop) {
+        let Some(old) = self.gfx.take() else { return };
+        let w = &old.window;
+        let size = w.inner_size();
+        let mut attrs = Window::default_attributes()
+            .with_title("Obview 3D")
+            .with_inner_size(size)
+            .with_min_inner_size(LogicalSize::new(960.0, 600.0))
+            .with_maximized(w.is_maximized())
+            .with_window_icon(window_icon());
+        if let Ok(pos) = w.outer_position() {
+            attrs = attrs.with_position(pos);
+        }
+        drop(old);
+        if let Err(e) = self.create_gfx(el, attrs) {
+            eprintln!("Obview 3D : {e}");
+            el.exit();
+            return;
+        }
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
     }
 
     /// Entrées de l'image. Le second résultat demande une image de plus (relâchement d'un appui éclair).
@@ -522,11 +551,11 @@ impl App {
         // Navigation et sélection dans la vue 3D.
         let view = self.state.viewport.get();
         let over_ui = self.ui.pointer_over_ui() || self.ui.is_active_any();
-        let scene = &gfx.scene;
+        let g: &Gfx = gfx;
         let cam_now = self.state.camera;
         let mut pick = |p: Vec2| -> Option<[f64; 3]> {
             let px = [(p.x - view.min.x) * scale, (p.y - view.min.y) * scale];
-            scene.pick(&cam_now, [view.width() * scale, view.height() * scale], px).ok().flatten().map(|h| h.position)
+            g.pick(&cam_now, [view.width() * scale, view.height() * scale], px).map(|h| h.position)
         };
         let ctx = NavContext { input: &input, view, over_ui, settings: &self.state.settings };
         let moved = self.nav.update(&ctx, &mut self.state.camera, &mut pick);
@@ -553,7 +582,7 @@ impl App {
                 }
             } else if d.x.abs() + d.y.abs() < 4.0 && self.state.tool == Tool::Measure {
                 // Mesure : premier point, puis second point qui termine la cote.
-                if let Some((q, _)) = Self::measure_point(&gfx.scene, &self.model, &self.state, scale, p) {
+                if let Some((q, _)) = Self::measure_point(gfx, &self.model, &self.state, scale, p) {
                     match self.state.measure.pending.take() {
                         Some(a) => self.state.measure.done.push([a, q]),
                         None => self.state.measure.pending = Some(q),
@@ -561,8 +590,8 @@ impl App {
                 }
             } else if d.x.abs() + d.y.abs() < 4.0 {
                 let px = [(p.x - view.min.x) * scale, (p.y - view.min.y) * scale];
-                let hit = gfx.scene.pick(&self.state.camera, [view.width() * scale, view.height() * scale], px);
-                let part = hit.ok().flatten().map(|h| h.id as usize);
+                let hit = gfx.pick(&self.state.camera, [view.width() * scale, view.height() * scale], px);
+                let part = hit.map(|h| h.id as usize);
                 // Double-clic sur une pièce : sélection et panneau des propriétés ouvert.
                 let double = part.is_some()
                     && (self.press_burst >= 2
@@ -618,7 +647,7 @@ impl App {
                 self.state.measure.hover = input
                     .pointer
                     .filter(|p| view.contains(*p))
-                    .and_then(|p| Self::measure_point(&gfx.scene, &self.model, &self.state, scale, p));
+                    .and_then(|p| Self::measure_point(gfx, &self.model, &self.state, scale, p));
             }
         } else {
             self.state.measure.hover = None;
@@ -654,36 +683,14 @@ impl App {
         let key = SceneKey::new(&self.state, accent, self.edges.is_some());
         if self.scene_key.as_ref() != Some(&key) {
             let meshes = mesh_inputs(&self.model, &self.state, accent, self.edges.as_ref());
-            if let Err(e) = gfx.scene.set_meshes(&meshes) {
-                self.error = Some(e.to_string());
+            if let Err(e) = gfx.set_meshes(&meshes) {
+                self.error = Some(e);
             }
             self.scene_key = Some(key);
         }
 
-        let c = &self.ui.theme.color;
-        let bg = [c.app_bg.r, c.app_bg.g, c.app_bg.b, 1.0];
-        let extent = gfx.swapchain.extent;
-        let (ui_r, scene_r, dl, atlas, theme, state) =
-            (&mut gfx.ui_renderer, &gfx.scene, &self.ui.dl, &mut self.ui.atlas, &self.ui.theme, &self.state);
-        let mut prep_err = None;
-        let ui_cell = std::cell::RefCell::new(ui_r);
-        let r = gfx.swapchain.present(
-            bg,
-            |cmd, slot| {
-                if let Err(e) = ui_cell.borrow_mut().prepare(cmd, slot, dl, atlas) {
-                    prep_err = Some(e);
-                }
-            },
-            |cmd| {
-                draw_viewport(scene_r, cmd, state, theme, scale);
-                ui_cell.borrow().draw(cmd, extent);
-            },
-        );
-        if let Err(e) = r {
-            self.error = Some(e.to_string());
-        }
-        if let Some(e) = prep_err {
-            self.error = Some(e.to_string());
+        if let Err(e) = gfx.present(&mut self.ui, &self.state, scale) {
+            self.error = Some(e);
         }
         // La carte « Préparation » est à l'écran : le modèle sera installé à l'image suivante.
         if let Some(r) = &mut self.ready
@@ -853,8 +860,8 @@ impl ApplicationHandler<Wake> for App {
         let mut redraw = true;
         match event {
             WindowEvent::CloseRequested => {
-                if gfx.gpu.validation_errors() > 0 {
-                    eprintln!("Obview 3D : {} erreurs de validation Vulkan", gfx.gpu.validation_errors());
+                if gfx.validation_errors() > 0 {
+                    eprintln!("Obview 3D : {} erreurs de validation Vulkan", gfx.validation_errors());
                 }
                 if self.state.settings_dirty {
                     let _ = self.state.settings.save();
@@ -862,10 +869,10 @@ impl ApplicationHandler<Wake> for App {
                 el.exit();
                 return;
             }
-            WindowEvent::Resized(s) => gfx.swapchain.resize(s.width, s.height),
+            WindowEvent::Resized(s) => gfx.resize(s.width, s.height),
             WindowEvent::ScaleFactorChanged { .. } => {
                 let s = gfx.window.inner_size();
-                gfx.swapchain.resize(s.width, s.height);
+                gfx.resize(s.width, s.height);
             }
             WindowEvent::ThemeChanged(t) => self.state.system_dark = t == WinTheme::Dark,
             WindowEvent::CursorMoved { position, .. } => {
@@ -938,6 +945,11 @@ impl ApplicationHandler<Wake> for App {
             WindowEvent::HoveredFileCancelled => self.state.drop_hover = false,
             WindowEvent::RedrawRequested => {
                 self.redraw();
+                // Moteur changé dans les réglages : bascule après l'image.
+                if self.state.settings.renderer != self.applied_renderer {
+                    self.switch_renderer(el);
+                    return;
+                }
                 redraw = false;
             }
             _ => redraw = false,

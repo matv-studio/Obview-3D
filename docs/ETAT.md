@@ -3,7 +3,7 @@
 Mis à jour : 10/11/2026.
 
 ## Fait
-- Décisions D-01 à D-29 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-30 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -53,14 +53,19 @@ Mis à jour : 10/11/2026.
   annulation, avis d'échec ; GLB quantifié lisible par Blender ; interface en anglais par défaut, français au
   choix. Captures de référence régénérées (anglais) ; nouvelles : vue vide, lecture, avis, français,
   transitions en cours.
+- D-30 : compression Draco (bibliothèque de Google, `obv-draco`) en écriture et en lecture GLB ; écart garanti
+  tenu avec la quantification (90 % simplification, 10 % quantification, essai de Hausdorff) ; moteur OpenGL
+  4.3 de secours (`obv-gl`, mêmes nuanceurs, même image que Vulkan dans les essais), choix et bascule à chaud
+  dans Réglages › Affichage ; version macOS Apple Silicon par KosmicKrisp (`tools/macos-sdk.sh`,
+  `tools/macos-app.sh`, job CI `macos-26`) ; DirectX 12 écarté. Version 0.2.0.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
-0. Brouillon de version v0.1.0 préparé le 10/11/2026 (archive Windows de 10 Mo, exécutable unique de 24 Mo) :
-   à publier par l'utilisateur après essai (un nouveau brouillon après D-29 est à proposer). En attente de
-   l'utilisateur : discussion OpenGL, macOS, Linux ; choix pour Draco (D-29). Ensuite : réglage de la finesse
-   du maillage STEP ; arbre d'assemblage (chemins lus, pas encore affichés) ; défilement de l'arbre jusqu'à la
-   pièce double-cliquée.
+0. Brouillon de version v0.2.0 (Windows x64, macOS arm64) préparé par `version.yml` : à essayer et publier par
+   l'utilisateur ; le brouillon v0.1.0 est dépassé. Application macOS jamais lancée sur un Mac réel (CI sans
+   Metal 4) : premier essai à faire par l'utilisateur. Bascule de moteur à chaud vérifiée seulement dans les
+   essais. Ensuite : réglage de la finesse du maillage STEP ; arbre d'assemblage (chemins lus, pas encore
+   affichés) ; défilement de l'arbre jusqu'à la pièce double-cliquée ; Linux à discuter.
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
 2. Fichiers récents ; menu contextuel de la vue (isoler, masquer, cadrer).
 3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie ;

@@ -9,8 +9,8 @@ use obv_ui::{
 
 use crate::{
     settings::{
-        GizmoStyle, Language, NavAction, NavScheme, Scope, Settings, ThemeChoice, ToolButton, Units, gesture_keys,
-        gestures,
+        GizmoStyle, Language, NavAction, NavScheme, RendererChoice, Scope, Settings, ThemeChoice, ToolButton, Units,
+        gesture_keys, gestures,
     },
     shell::AppState,
 };
@@ -304,9 +304,29 @@ fn display(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         s.settings.gizmo = GizmoStyle::ALL[i];
         s.settings_dirty = true;
     }
+    // Moteur de rendu (D-30) : changement immédiat, fenêtre recréée.
+    let labels: Vec<&str> = RendererChoice::ALL.iter().map(|r| r.label()).collect();
+    let cur = RendererChoice::ALL.iter().position(|r| *r == s.settings.renderer).unwrap_or(0);
+    let (mut engine, picked) = segmented(ui, id("moteur"), &labels, cur, 240.0);
+    let tips = ["Vulkan, OpenGL en secours", "Vulkan 1.3 ou plus récent", "OpenGL 4.3 ou plus récent"];
+    for (child, t) in engine.children.iter_mut().zip(tips) {
+        child.tooltip = Some(Tooltip { text: tr(t).into(), shortcut: None });
+    }
+    if let Some(i) = picked {
+        s.settings.renderer = RendererChoice::ALL[i];
+        s.settings_dirty = true;
+    }
+    let active = Node::text(s.renderer.1.clone(), TextStyle::new(12.5, Weight::Regular), ui.theme.color.text_secondary);
+    // macOS n'offre qu'OpenGL 4.1 : Vulkan (KosmicKrisp) seul, pas de choix à proposer.
+    let mut rendering = vec![setting_row(ui, tr("Moteur"), engine), setting_row(ui, tr("Actif"), active)];
+    if cfg!(target_os = "macos") {
+        rendering.remove(0);
+    }
     vec![
         section_title(ui, tr("Vue 3D")),
         card(ui, vec![setting_row(ui, tr("Unités"), sel), setting_row(ui, tr("Gizmo de navigation"), seg)]),
+        section_title(ui, tr("Rendu")),
+        card(ui, rendering),
     ]
 }
 

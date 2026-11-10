@@ -8,7 +8,7 @@ layout(location = 1) out vec2 v_pos;
 const vec2 CORNERS[6] = vec2[](vec2(0, 0), vec2(1, 0), vec2(0, 1), vec2(1, 0), vec2(1, 1), vec2(0, 1));
 
 void main() {
-    Prim p = pc.prims.p[gl_InstanceIndex];
+    Prim p = PRIM(INSTANCE_ID);
     uint kind = uint(p.params.z);
     vec2 lo, hi;
     if (kind == KIND_LINE) {
@@ -35,8 +35,8 @@ void main() {
         lo = max(lo, p.clip.xy);
         hi = max(min(hi, p.clip.zw), lo);
     }
-    vec2 pos = mix(lo, hi, CORNERS[gl_VertexIndex]);
-    v_index = gl_InstanceIndex;
+    vec2 pos = mix(lo, hi, CORNERS[VERTEX_ID]);
+    v_index = uint(INSTANCE_ID);
     // Le fragment lit l'atlas d'après la position d'origine ; seule la position à l'écran est transformée.
     v_pos = pos;
     if (rotated) {
@@ -45,4 +45,8 @@ void main() {
         pos = p.border.yz + vec2(m.x * d.x + m.y * d.y, m.z * d.x + m.w * d.y);
     }
     gl_Position = vec4(pos / pc.screen * 2.0 - 1.0, 0.0, 1.0);
+#ifdef OBV_GL
+    // Repère de découpage d'OpenGL : y vers le haut.
+    gl_Position.y = -gl_Position.y;
+#endif
 }

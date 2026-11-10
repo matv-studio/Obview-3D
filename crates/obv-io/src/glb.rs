@@ -1,6 +1,7 @@
 //! glTF 2.0 binaire : en-tête, bloc JSON, bloc binaire ; nœuds et transformations, accesseurs avec pas,
 //! matériaux métal-rugosité, textures (intégrées, en `data:` ou en fichiers voisins), coordonnées de texture,
-//! compression `EXT_meshopt_compression` et quantification `KHR_mesh_quantization`.
+//! compressions `EXT_meshopt_compression` et `KHR_draco_mesh_compression` (D-30), quantification
+//! `KHR_mesh_quantization`.
 
 use std::{borrow::Cow, path::Path};
 
@@ -204,8 +205,21 @@ impl Doc<'_> {
             return Ok(Mesh::default());
         }
         let attrs = &prim["attributes"];
-        let pi = attrs["POSITION"].as_u64().ok_or_else(|| invalid("primitive sans POSITION"))? as usize;
-        let p = self.floats(pi, 3)?;
+        // Primitive Draco : attributs et indices dans le flux de sa vue ; les accesseurs ne portent que les
+        // comptes. Un attribut absent du flux se lit par son accesseur.
+        let draco_ext = &prim["extensions"]["KHR_draco_mesh_compression"];
+        let draco = match draco_ext["bufferView"].as_u64() {
+            Some(v) => Some(obv_draco::decode(self.view(v as usize)?.0).map_err(invalid)?),
+            None => None,
+        };
+        let get = |name: &str, n: usize| -> Result<Option<Vec<f64>>, ReadError> {
+            if let (Some(d), Some(id)) = (&draco, draco_ext["attributes"][name].as_u64()) {
+                let v = d.attribute(id as u32, n as u32).ok_or_else(|| invalid(format!("Draco : {name} absent")))?;
+                return Ok(Some(v.into_iter().map(f64::from).collect()));
+            }
+            attrs[name].as_u64().map(|i| self.floats(i as usize, n)).transpose()
+        };
+        let p = get("POSITION", 3)?.ok_or_else(|| invalid("primitive sans POSITION"))?;
         let vcount = p.len() / 3;
         let normal_m = normal_matrix(m);
         let positions: Vec<[f32; 3]> = p
@@ -217,20 +231,20 @@ impl Doc<'_> {
                 [x as f32, y as f32, z as f32]
             })
             .collect();
-        let indices: Vec<u32> = match prim["indices"].as_u64() {
-            Some(i) => self.floats(i as usize, 1)?.into_iter().map(|v| v as u32).collect(),
-            None => (0..vcount as u32).collect(),
+        let indices: Vec<u32> = match (&draco, prim["indices"].as_u64()) {
+            (Some(d), _) => d.indices(),
+            (None, Some(i)) => self.floats(i as usize, 1)?.into_iter().map(|v| v as u32).collect(),
+            (None, None) => (0..vcount as u32).collect(),
         };
         if indices.iter().any(|&i| i as usize >= vcount) {
             return Err(invalid("indice hors des sommets"));
         }
-        let uvs: Vec<[f32; 2]> = match attrs["TEXCOORD_0"].as_u64() {
-            Some(ti) => self.floats(ti as usize, 2)?.chunks_exact(2).map(|t| [t[0] as f32, t[1] as f32]).collect(),
+        let uvs: Vec<[f32; 2]> = match get("TEXCOORD_0", 2)? {
+            Some(t) => t.chunks_exact(2).map(|t| [t[0] as f32, t[1] as f32]).collect(),
             None => Vec::new(),
         };
-        let normals = match attrs["NORMAL"].as_u64() {
-            Some(ni) => self
-                .floats(ni as usize, 3)?
+        let normals = match get("NORMAL", 3)? {
+            Some(nrm) => nrm
                 .chunks_exact(3)
                 .map(|n| {
                     let x = normal_m[0] * n[0] + normal_m[3] * n[1] + normal_m[6] * n[2];

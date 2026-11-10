@@ -1,0 +1,20 @@
+[package]
+name = "obv-gl"
+description = "Moteur OpenGL 4.30 de secours (D-30) : scène, sélection, interface et présentation, mêmes nuanceurs que Vulkan."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+obv-render = { path = "../obv-render" }
+obv-ui = { path = "../obv-ui" }
+glow = "0.18"
+bytemuck.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+glutin = { version = "0.32", default-features = false, features = ["egl"] }
+
+[lints]
+workspace = true

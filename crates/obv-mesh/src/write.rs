@@ -42,10 +42,32 @@ pub enum Compression {
     /// Quantification et codec meshoptimizer (`EXT_meshopt_compression`, exigée) : le plus léger et le plus rapide
     /// à décoder, pour le web (three.js, Babylon.js) ; Blender ne la lit pas.
     Meshopt,
+    /// Codec Draco de Google (`KHR_draco_mesh_compression`, exigée) : le plus compact parmi les formats lus par
+    /// Blender, three.js, glTFast et Babylon.js (D-30). Absent si la construction n'a pas Draco.
+    Draco,
 }
 
 impl Compression {
-    pub const ALL: [Compression; 3] = [Compression::None, Compression::Quantize, Compression::Meshopt];
+    pub const ALL: [Compression; 4] =
+        [Compression::None, Compression::Quantize, Compression::Meshopt, Compression::Draco];
+
+    /// Proposée par cette construction ?
+    pub const fn available(self) -> bool {
+        !matches!(self, Compression::Draco) || obv_draco::available()
+    }
+}
+
+/// Demi-diagonale d'une case de quantification de pas 1 : distance maximale entre un point et sa position
+/// quantifiée.
+const HALF_DIAGONAL: f32 = 0.866_025_4;
+
+/// Bits de quantification Draco des positions : le moins de bits dont l'erreur reste dans `budget` (11 au moins,
+/// 30 au plus, limite de Draco) ; 30 bits sans budget (forme exacte, au milliardième de l'étendue).
+fn draco_position_bits(extent: f32, budget: f32) -> i32 {
+    if budget <= 0.0 {
+        return 30;
+    }
+    (11..=30).find(|b| extent / ((1u64 << b) - 1) as f32 * HALF_DIAGONAL <= budget).unwrap_or(30)
 }
 
 /// Options d'écriture.
@@ -54,7 +76,9 @@ pub struct WriteOptions {
     pub format: Format,
     /// GLB : compression des géométries.
     pub compression: Compression,
-    /// Écart accepté (unités du modèle) : borne la quantification des positions (0 : positions en flottants).
+    /// Part de l'écart garanti laissée à la quantification des positions (unités du modèle) : un sommet quantifié
+    /// reste à cette distance au plus de sa position (demi-diagonale d'une case : √3/2 × pas). 0 : positions
+    /// exactes (flottants ; Draco sur 30 bits).
     pub tolerance: f32,
 }
 
@@ -181,7 +205,9 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
     use serde_json::{Value, json};
     let to_m = model.unit_m as f32;
     let meshopt_on = opts.compression == Compression::Meshopt;
-    let quant_on = opts.compression != Compression::None;
+    let draco_on = opts.compression == Compression::Draco && obv_draco::available();
+    let quant_on = !matches!(opts.compression, Compression::None | Compression::Draco);
+    let mut used_draco = false;
     if meshopt_on {
         unsafe {
             // SAFETY: réglage global de version, sans effet sur la mémoire. Version 0 du codec de sommets : celle
@@ -255,6 +281,67 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         }
         let n = m.positions.len();
         let pos: Vec<[f32; 3]> = m.positions.iter().map(|p| p.map(|v| v * to_m)).collect();
+        if draco_on {
+            // Une primitive Draco par groupe de matériau : sommets du groupe seulement, renumérotés.
+            let mut prims = Vec::new();
+            for g in m.groups() {
+                let idx = &m.indices[g.first as usize..(g.first + g.count) as usize];
+                let mut remap = vec![u32::MAX; n];
+                let (mut gp, mut gn, mut gu, mut gi) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                for &i in idx {
+                    let r = &mut remap[i as usize];
+                    if *r == u32::MAX {
+                        *r = gp.len() as u32;
+                        gp.push(pos[i as usize]);
+                        gn.push(m.normals.get(i as usize).copied().unwrap_or([0.0, 0.0, 1.0]));
+                        if m.uvs.len() == n {
+                            gu.push(m.uvs[i as usize]);
+                        }
+                    }
+                    gi.push(*r);
+                }
+                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                for p in &gp {
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(p[k]);
+                        hi[k] = hi[k].max(p[k]);
+                    }
+                }
+                let extent = (0..3).map(|k| hi[k] - lo[k]).fold(0.0f32, f32::max).max(1e-12);
+                let o = obv_draco::EncodeOptions {
+                    position_bits: draco_position_bits(extent, opts.tolerance * to_m),
+                    ..Default::default()
+                };
+                let Ok(e) = obv_draco::encode(&gp, &gn, &gu, &gi, o) else { continue };
+                used_draco = true;
+                let view = bin.raw(&e.data, None);
+                let count = e.points;
+                accessors.push(json!({"componentType": 5126, "count": count, "type": "VEC3", "min": lo, "max": hi}));
+                let mut attrs = json!({"POSITION": accessors.len() - 1});
+                let mut dattrs = json!({"POSITION": e.position_id});
+                if let Some(id) = e.normal_id {
+                    accessors.push(json!({"componentType": 5126, "count": count, "type": "VEC3"}));
+                    attrs["NORMAL"] = json!(accessors.len() - 1);
+                    dattrs["NORMAL"] = json!(id);
+                }
+                if let Some(id) = e.uv_id {
+                    accessors.push(json!({"componentType": 5126, "count": count, "type": "VEC2"}));
+                    attrs["TEXCOORD_0"] = json!(accessors.len() - 1);
+                    dattrs["TEXCOORD_0"] = json!(id);
+                }
+                let small = count <= u16::MAX as u32;
+                accessors.push(json!({"componentType": if small { 5123 } else { 5125 },
+                    "count": e.faces * 3, "type": "SCALAR"}));
+                let mat = g.material.map(|m| m as usize).filter(|m| *m < default_material).unwrap_or(default_material);
+                prims.push(json!({"attributes": attrs, "indices": accessors.len() - 1, "material": mat,
+                    "extensions": {"KHR_draco_mesh_compression": {"bufferView": view, "attributes": dattrs}}}));
+            }
+            if !prims.is_empty() {
+                nodes.push(json!({"name": part.name, "mesh": meshes.len()}));
+                meshes.push(json!({"name": part.name, "primitives": prims}));
+            }
+            continue;
+        }
         let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
         for p in &pos {
             for i in 0..3 {
@@ -263,10 +350,10 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
             }
         }
         // Quantification des positions sur 16 bits, échelle uniforme (les normales ne sont pas déformées),
-        // seulement si le pas reste sous le quart de l'écart accepté.
+        // seulement si l'erreur qu'elle introduit reste dans sa part de l'écart garanti.
         let extent = (0..3).map(|i| hi[i] - lo[i]).fold(0.0f32, f32::max).max(1e-12);
         let step = extent / 65535.0;
-        let quantize = quant_on && opts.tolerance > 0.0 && step <= opts.tolerance * to_m * 0.25;
+        let quantize = quant_on && opts.tolerance > 0.0 && step * HALF_DIAGONAL <= opts.tolerance * to_m;
         let mut node = json!({"name": part.name, "mesh": meshes.len()});
         let pos_acc = if quantize {
             used_quantization = true;
@@ -358,6 +445,9 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         nodes.push(node);
     }
     let mut ext_used: Vec<&str> = Vec::new();
+    if used_draco {
+        ext_used.push("KHR_draco_mesh_compression");
+    }
     if meshopt_on {
         ext_used.push("EXT_meshopt_compression");
     }
@@ -933,8 +1023,12 @@ mod tests {
                 Compression::None => assert!(required.is_empty(), "{required:?}"),
                 Compression::Quantize => assert_eq!(required, ["KHR_mesh_quantization"]),
                 Compression::Meshopt => assert!(required.contains(&"EXT_meshopt_compression")),
+                Compression::Draco if obv_draco::available() => {
+                    assert_eq!(required, ["KHR_draco_mesh_compression"])
+                }
+                Compression::Draco => {}
             }
-            // Positions quantifiées : à moins d'un pas (10 mm / 65535) près.
+            // Positions quantifiées : à moins d'un pas (10 mm / 65535, ou 10 mm / 2^16 pour Draco) près.
             let mesh = &m.parts[0].mesh;
             assert!(mesh.positions.iter().any(|q| (q[0] - 0.01).abs() < 1e-6), "{:?}", mesh.positions);
         }

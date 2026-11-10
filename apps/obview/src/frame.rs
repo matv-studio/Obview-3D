@@ -2,9 +2,10 @@
 
 use std::cell::RefCell;
 
-use obv_gpu::{Gpu, RenderTarget, Result};
+use obv_gl::{GlDevice, GlScene, GlTarget};
+use obv_gpu::{Gpu, RenderTarget, Result, vk};
 use obv_io::Model;
-use obv_render::{MeshInput, RenderMode, SceneParams, SceneRenderer, feature_edges};
+use obv_render::{Band, Camera, MeshInput, RenderMode, SceneParams, SceneRenderer, feature_edges};
 use obv_ui::{Theme, ThemeKind, Ui, gpu::UiRenderer};
 use rayon::prelude::*;
 
@@ -33,14 +34,55 @@ impl EdgeCache {
 }
 
 /// Fond, puis la scène dans le rendu choisi : vue normale, bandes de l'inspecteur ou rendu isolé (D-15).
-pub fn draw_viewport(
-    scene: &SceneRenderer,
-    cmd: obv_gpu::vk::CommandBuffer,
-    state: &AppState,
-    theme: &Theme,
-    scale: f32,
-) {
-    draw_view(scene, cmd, state, theme, state.viewport.get(), scale, Target::Screen);
+/// Tracés de la scène, quel que soit le moteur (D-30) : paramètres de l'image, fond et surfaces par bande.
+pub trait SceneDraw {
+    fn set_params(&self, camera: &Camera, params: &SceneParams<'_>);
+    /// `rect` : pixels de la cible, origine en haut à gauche.
+    fn background(&self, rect: [f32; 4], top: [f32; 4], bottom: [f32; 4], band: Band);
+    fn scene(&self, rect: [f32; 4], camera: &Camera, mode: RenderMode, band: Band);
+}
+
+/// Vulkan : tracés enregistrés dans `cmd`.
+pub struct VkDraw<'a> {
+    pub scene: &'a SceneRenderer,
+    pub cmd: vk::CommandBuffer,
+}
+
+impl SceneDraw for VkDraw<'_> {
+    fn set_params(&self, camera: &Camera, params: &SceneParams<'_>) {
+        if let Err(e) = self.scene.set_params(camera, params) {
+            eprintln!("Obview 3D : paramètres de l'image : {e}");
+        }
+    }
+    fn background(&self, rect: [f32; 4], top: [f32; 4], bottom: [f32; 4], band: Band) {
+        self.scene.draw_background_band(self.cmd, rect, top, bottom, band);
+    }
+    fn scene(&self, rect: [f32; 4], camera: &Camera, mode: RenderMode, band: Band) {
+        self.scene.draw_scene(self.cmd, rect, camera, mode, band);
+    }
+}
+
+/// OpenGL : tracés immédiats dans la cible courante, haute de `height` pixels.
+pub struct GlDraw<'a> {
+    pub dev: &'a GlDevice,
+    pub scene: &'a GlScene,
+    pub height: u32,
+}
+
+impl SceneDraw for GlDraw<'_> {
+    fn set_params(&self, camera: &Camera, params: &SceneParams<'_>) {
+        self.scene.set_params(self.dev, camera, params);
+    }
+    fn background(&self, rect: [f32; 4], top: [f32; 4], bottom: [f32; 4], band: Band) {
+        self.scene.draw_background_band(self.dev, rect, self.height, top, bottom, band);
+    }
+    fn scene(&self, rect: [f32; 4], camera: &Camera, mode: RenderMode, band: Band) {
+        self.scene.draw_scene(self.dev, rect, self.height, camera, mode, band);
+    }
+}
+
+pub fn draw_viewport(scene: &dyn SceneDraw, state: &AppState, theme: &Theme, scale: f32) {
+    draw_view(scene, state, theme, state.viewport.get(), scale, Target::Screen);
 }
 
 /// Destination d'une image de la vue.
@@ -53,15 +95,7 @@ pub enum Target {
 }
 
 /// Comme [`draw_viewport`] pour une vue `v` (pixels logiques) quelconque.
-pub fn draw_view(
-    scene: &SceneRenderer,
-    cmd: obv_gpu::vk::CommandBuffer,
-    state: &AppState,
-    theme: &Theme,
-    v: obv_ui::Rect,
-    scale: f32,
-    target: Target,
-) {
+pub fn draw_view(scene: &dyn SceneDraw, state: &AppState, theme: &Theme, v: obv_ui::Rect, scale: f32, target: Target) {
     let animated = target == Target::Screen;
     let transparent = target == Target::Capture { transparent: true };
     let rect = [v.min.x * scale, v.min.y * scale, v.max.x * scale, v.max.y * scale];
@@ -69,9 +103,7 @@ pub fn draw_view(
     let cam = &state.camera;
     let offsets = tools::explode_offsets(state);
     let params = SceneParams { section: tools::section_plane(state), offsets: &offsets };
-    if let Err(e) = scene.set_params(cam, &params) {
-        eprintln!("Obview 3D : paramètres de l'image : {e}");
-    }
+    scene.set_params(cam, &params);
     // Vue normale et bandes des rendus selon les limites animées (au repos : l'état exact de l'inspecteur).
     let cuts = if animated { state.inspector_cuts } else { inspector::target_cuts(state.inspector) };
     let top = [c.viewport_top.r, c.viewport_top.g, c.viewport_top.b, 1.0];
@@ -80,9 +112,9 @@ pub fn draw_view(
     for (m, band) in inspector::device_regions(v, &cuts, scale) {
         let (t, b) = if m.is_some() { (gray, gray) } else { (top, bottom) };
         if !transparent {
-            scene.draw_background_band(cmd, rect, t, b, band);
+            scene.background(rect, t, b, band);
         }
-        scene.draw_scene(cmd, rect, cam, m.unwrap_or(RenderMode::Lit), band);
+        scene.scene(rect, cam, m.unwrap_or(RenderMode::Lit), band);
     }
 }
 
@@ -109,8 +141,36 @@ pub fn capture(
     let scale = w as f32 / v.width().max(1.0);
     let view = obv_ui::Rect::from_xywh(0.0, 0.0, v.width(), v.height());
     let clear = if transparent { [0.0; 4] } else { [0.0, 0.0, 0.0, 1.0] };
-    target.render(clear, |cmd| draw_view(&scene, cmd, state, theme, view, scale, Target::Capture { transparent }))?;
+    target.render(clear, |cmd| {
+        draw_view(&VkDraw { scene: &scene, cmd }, state, theme, view, scale, Target::Capture { transparent })
+    })?;
     let rgba = target.read_rgba8();
+    Ok(if ss == 1 { rgba } else { downsample(&rgba, w, h, ss) })
+}
+
+/// Comme [`capture`] sous OpenGL, avec la scène déjà chargée (arêtes comprises quand une vue de rendu est
+/// ouverte).
+#[allow(clippy::too_many_arguments)]
+pub fn capture_gl(
+    dev: &GlDevice,
+    scene: &GlScene,
+    state: &AppState,
+    theme: &Theme,
+    width: u32,
+    height: u32,
+    transparent: bool,
+) -> std::result::Result<Vec<u8>, obv_gl::GlError> {
+    let ss = if width.max(height) * 2 <= 8192 { 2 } else { 1 };
+    let (w, h) = (width * ss, height * ss);
+    let target = GlTarget::new(dev, w, h)?;
+    let v = state.viewport.get();
+    let scale = w as f32 / v.width().max(1.0);
+    let view = obv_ui::Rect::from_xywh(0.0, 0.0, v.width(), v.height());
+    let clear = if transparent { [0.0; 4] } else { [0.0, 0.0, 0.0, 1.0] };
+    target.begin(dev, clear);
+    draw_view(&GlDraw { dev, scene, height: h }, state, theme, view, scale, Target::Capture { transparent });
+    let rgba = target.read_rgba8(dev);
+    target.destroy(dev);
     Ok(if ss == 1 { rgba } else { downsample(&rgba, w, h, ss) })
 }
 
@@ -243,11 +303,74 @@ impl OffscreenFrame {
             bg,
             |cmd| prepare_result = renderer.borrow_mut().prepare(cmd, 0, dl, &mut atlas.borrow_mut()),
             |cmd| {
-                draw_viewport(scene, cmd, state, theme, scale);
+                draw_viewport(&VkDraw { scene, cmd }, state, theme, scale);
                 renderer.borrow().draw(cmd, extent);
             },
         )?;
         prepare_result?;
         Ok(self.target.read_rgba8())
+    }
+}
+
+/// Image complète sous OpenGL, sans fenêtre (essais, D-30) : même contenu qu'[`OffscreenFrame`].
+#[cfg(target_os = "linux")]
+pub struct GlOffscreenFrame {
+    pub headless: obv_gl::headless::Headless,
+    target: Option<GlTarget>,
+    scene: Option<GlScene>,
+    ui: Option<obv_gl::GlUi>,
+    edges: Option<EdgeCache>,
+}
+
+#[cfg(target_os = "linux")]
+impl GlOffscreenFrame {
+    pub fn new(width: u32, height: u32) -> std::result::Result<Self, obv_gl::GlError> {
+        let headless = obv_gl::headless::Headless::new()?;
+        let dev = &headless.device;
+        let target = GlTarget::new(dev, width, height)?;
+        let scene = GlScene::new(dev)?;
+        let ui = obv_gl::GlUi::new(dev, 2048)?;
+        Ok(GlOffscreenFrame { target: Some(target), scene: Some(scene), ui: Some(ui), headless, edges: None })
+    }
+
+    pub fn set_model(
+        &mut self,
+        model: &Model,
+        state: &AppState,
+        accent: [u8; 4],
+    ) -> std::result::Result<(), obv_gl::GlError> {
+        if state.inspector != Inspector::Off && self.edges.is_none() {
+            self.edges = Some(EdgeCache::compute(model));
+        }
+        let meshes = mesh_inputs(model, state, accent, self.edges.as_ref());
+        self.scene.as_mut().unwrap().set_meshes(&self.headless.device, &meshes)
+    }
+
+    pub fn render(&mut self, ui: &mut Ui, state: &AppState) -> Vec<u8> {
+        let dev = &self.headless.device;
+        let (target, scene, glui) =
+            (self.target.as_ref().unwrap(), self.scene.as_ref().unwrap(), self.ui.as_mut().unwrap());
+        let c = &ui.theme.color;
+        target.begin(dev, [c.app_bg.r, c.app_bg.g, c.app_bg.b, 1.0]);
+        draw_viewport(&GlDraw { dev, scene, height: target.height }, state, &ui.theme, ui.dl.scale);
+        glui.prepare(dev, &ui.dl, &mut ui.atlas);
+        glui.draw(dev, target.width, target.height);
+        target.read_rgba8(dev)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for GlOffscreenFrame {
+    fn drop(&mut self) {
+        let dev = &self.headless.device;
+        if let Some(t) = self.target.take() {
+            t.destroy(dev);
+        }
+        if let Some(s) = self.scene.take() {
+            s.destroy(dev);
+        }
+        if let Some(u) = self.ui.take() {
+            u.destroy(dev);
+        }
     }
 }

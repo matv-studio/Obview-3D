@@ -48,7 +48,7 @@ void main() {
         // Face arrière vue à travers la coupe : intérieur de la matière, rendu comme le bouchon posé sur le
         // plan (normale du plan, hachures à 45° à l'écran). Elle garde sa propre profondeur : toute face avant
         // située entre le plan et elle la cache, comme la matière le ferait.
-        vec3 pn = pc.params.plane.xyz;
+        vec3 pn = PARAMS.plane.xyz;
         float hatch = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 9.0));
         vec3 cap = lit(base, pn, v) * mix(0.62, 0.48, hatch);
         out_color = vec4(cap, 1.0);

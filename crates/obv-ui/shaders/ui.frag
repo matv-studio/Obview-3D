@@ -5,7 +5,11 @@
 layout(location = 0) in flat uint v_index;
 layout(location = 1) in vec2 v_pos;
 layout(location = 0) out vec4 out_color;
+#ifdef OBV_GL
+layout(binding = 0) uniform sampler2D atlas;
+#else
 layout(set = 0, binding = 0) uniform sampler2D atlas;
+#endif
 
 // Distance signée à une boîte arrondie (rayons : haut-gauche, haut-droite, bas-droite, bas-gauche ; y vers le bas).
 float sd_round_box(vec2 p, vec2 b, vec4 r) {
@@ -50,7 +54,7 @@ float rounded_box_shadow(vec2 lower, vec2 upper, vec2 point, float sigma, float 
 }
 
 void main() {
-    Prim p = pc.prims.p[v_index];
+    Prim p = PRIM(v_index);
     uint kind = uint(p.params.z);
     vec2 pos = v_pos;
     if (kind == KIND_COVERAGE) {

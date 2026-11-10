@@ -37,3 +37,9 @@ pub use text::{Fonts, TextLayout, TextStyle, Weight};
 pub use theme::ACCENT_PRESETS;
 pub use theme::{AccentScope, Metrics, Palette, Theme, ThemeKind};
 pub use ui::{Cursor, EditState, Hit, Id, IdPart, Layer, Painter, Resources, ScrollState, Ui};
+
+/// Sources OpenGL 4.30 des nuanceurs de l'interface (moteur de secours, D-30), produites par `build.rs`.
+pub mod gl_src {
+    pub const UI_VERT: &str = include_str!(concat!(env!("OUT_DIR"), "/ui.vert.gl"));
+    pub const UI_FRAG: &str = include_str!(concat!(env!("OUT_DIR"), "/ui.frag.gl"));
+}

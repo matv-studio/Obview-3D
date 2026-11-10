@@ -1,7 +1,12 @@
 #version 460
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 out_color;
+#ifdef OBV_GL
+layout(origin_upper_left) in vec4 gl_FragCoord;
+layout(std140, binding = 0) uniform Push {
+#else
 layout(push_constant) uniform Push {
+#endif
     vec4 top;
     vec4 bottom;
     // Bande gardée : band.z <= dot(gl_FragCoord.xy, band.xy) < band.w.

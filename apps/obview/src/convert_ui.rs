@@ -219,24 +219,39 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         sil.tooltip(tr("Arêtes vives et contours plus fidèles, au prix de quelques triangles")),
     ));
     if s.convert.format == Format::Glb {
-        let cur = Compression::ALL.iter().position(|c| *c == s.convert.compression).unwrap_or(1);
-        let (mut comp, picked) =
-            crate::tools::segmented(ui, id("compression"), &[tr("Aucune"), tr("Quantifiée"), "Meshopt"], cur);
+        // Choix proposés par cette construction (Draco seulement si la bibliothèque est liée).
+        let options: Vec<Compression> = Compression::ALL.into_iter().filter(|c| c.available()).collect();
+        let label = |c: Compression| match c {
+            Compression::None => tr("Aucune"),
+            Compression::Quantize => tr("Quantifiée"),
+            Compression::Meshopt => "Meshopt",
+            Compression::Draco => "Draco",
+        };
+        let tip = |c: Compression| match c {
+            Compression::None => "Flottants : lisible partout",
+            Compression::Quantize => {
+                "KHR_mesh_quantization : environ deux fois plus léger ; Blender, Unity, Unreal, three.js, Babylon.js"
+            }
+            Compression::Meshopt => {
+                "EXT_meshopt_compression : très léger, le plus rapide à décoder, pour le web (three.js, Babylon.js) ; Blender ne le lit pas"
+            }
+            Compression::Draco => {
+                "KHR_draco_mesh_compression : le plus compact ; Blender, three.js, Unity (glTFast), Babylon.js ; décodage plus lent"
+            }
+        };
+        let labels: Vec<&str> = options.iter().map(|c| label(*c)).collect();
+        let cur = options.iter().position(|c| *c == s.convert.compression).unwrap_or(1);
+        let (mut comp, picked) = crate::tools::segmented(ui, id("compression"), &labels, cur);
         if let Some(i) = picked
             && !running
         {
-            s.convert.compression = Compression::ALL[i];
+            s.convert.compression = options[i];
             s.convert.status = Status::Idle;
         }
-        let tips = [
-            "Flottants : lisible partout",
-            "KHR_mesh_quantization : environ deux fois plus léger ; Blender, Unity, Unreal, three.js, Babylon.js",
-            "EXT_meshopt_compression : le plus léger, pour le web (three.js, Babylon.js) ; Blender ne le lit pas",
-        ];
-        for (child, tip) in comp.children.iter_mut().zip(tips) {
-            child.tooltip = Some(obv_ui::Tooltip { text: tr(tip).into(), shortcut: None });
+        for (child, c) in comp.children.iter_mut().zip(&options) {
+            child.tooltip = Some(obv_ui::Tooltip { text: tr(tip(*c)).into(), shortcut: None });
         }
-        body.push(row(ui, tr("Compression"), comp.width(Size::Px(280.0))));
+        body.push(row(ui, tr("Compression"), comp.width(Size::Px(84.0 * options.len() as f32))));
     }
     body.push(widgets::divider(ui));
     body.push(Node::new().height(Size::Px(14.0)));

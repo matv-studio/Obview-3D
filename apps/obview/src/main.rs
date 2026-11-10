@@ -2,7 +2,7 @@
 //!
 //! - `obview [fichier]` ouvre la fenêtre (avec `--validation` : couche de validation Vulkan) ;
 //! - `obview --info` affiche l'appareil Vulkan retenu ;
-//! - `obview --convert <entrée> <sortie.glb|obj|fbx> [--tolerance <mm>] [--no-silhouette] [--no-compression | --meshopt]`
+//! - `obview --convert <entrée> <sortie.glb|obj|fbx> [--tolerance <mm>] [--no-silhouette] [--no-compression | --meshopt | --draco]`
 //!   convertit sans fenêtre (noms français acceptés : `--convertir`, `--ecart`, `--sans-silhouette`,
 //!   `--sans-compression`). Messages dans la langue des réglages (anglais par défaut).
 
@@ -85,6 +85,8 @@ fn convert(args: &[String]) -> Result<(), String> {
             obv_mesh::Compression::None
         } else if args.iter().any(|a| a == "--meshopt") {
             obv_mesh::Compression::Meshopt
+        } else if args.iter().any(|a| a == "--draco") {
+            obv_mesh::Compression::Draco
         } else {
             obv_mesh::Compression::Quantize
         },

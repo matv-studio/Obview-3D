@@ -347,3 +347,41 @@ Demandes de l'utilisateur du 10/11/2026.
   chaque `tr("…")` du code et exige sa traduction. Ligne de commande : options anglaises (`--convert`,
   `--tolerance`, `--no-silhouette`, `--no-compression`), noms français toujours acceptés, messages dans la
   langue des réglages.
+
+## D-30 · Draco, moteur OpenGL de secours, macOS par KosmicKrisp, pas de DirectX 12 (10/11/2026)
+
+Demande : « Draco : est-il nécessaire ? si oui, la plus compatible » ; « deuxième moteur OpenGL (et DX12 si ça
+rentre) comme moteur secondaire si Vulkan n'est pas supporté » ; « Apple Silicon : OpenGL s'il est le plus
+performant, sinon la couche de traduction, KosmicKrisp » ; « pas de licence Apple » ; brouillon de version.
+
+- Draco : retenu. Blender lit `KHR_draco_mesh_compression` mais pas `EXT_meshopt_compression` (D-29) ; c'est le
+  plus petit GLB lisible par Blender (montre : flottants 14,6 Mo, quantifié 6,5 Mo, meshopt 3,6 Mo, Draco
+  1,9 Mo). Bibliothèque de référence de Google 1.5.9 (`tools/draco.sh`, statique, sans transcodeur), pont `cxx`
+  dans `obv-draco` ; `DRACO_DIR` l'active, `OBV_REQUIRE_DRACO` l'exige (CI, versions). Une primitive par groupe
+  de matériau ; extension déclarée exigée. Lecture des GLB Draco dans `obv-io`.
+- Écart garanti : la quantification ajoutait jusqu'à ~22 % de l'écart demandé (défaut antérieur, non mesuré).
+  Désormais 90 % de l'écart va à la simplification, 10 % à la quantification (Quantifiée, Meshopt, Draco) ; un
+  pas de quantification n'est retenu que si sa demi-diagonale (pas × 0,866) tient dans cette part ; bits Draco
+  de 11 à 30. Essai `obv-mesh/tests/ecart.rs` : distance de Hausdorff relue ≤ écart demandé, chaque compression.
+- Moteur OpenGL 4.3 cœur (`obv-gl`, glow, glutin) : mêmes sources GLSL que Vulkan, prétraitées en variante
+  `OBV_GL` à la construction (tampons de stockage std430, blocs uniformes à la place des constantes poussées) ;
+  profondeur inversée par `glClipControl` ou, à défaut, remise à l'échelle dans le nuanceur. Choix dans
+  Réglages › Affichage › Rendu : Auto (Vulkan, puis OpenGL), Vulkan, OpenGL ; bascule à chaud (fenêtre recréée),
+  avis si le moteur demandé manque ; `--gl`, `--vulkan`, `OBV_RENDERER`. Essai : sept écrans rendus par les deux
+  moteurs (lavapipe et llvmpipe), écart moyen < 0,5 niveau.
+- DirectX 12 : écarté. Dozen (Vulkan sur D3D12, Mesa) ne dépasse pas Vulkan 1.2 environ et n'est pas conforme,
+  alors qu'Obview exige Vulkan 1.3 ; un moteur D3D12 natif serait un troisième moteur entier (nuanceurs HLSL ou
+  traduction, mémoire, présentation) pour les seules machines Windows sans Vulkan, déjà couvertes par OpenGL 4.3.
+  À reprendre si une machine réelle n'a ni Vulkan 1.3 ni OpenGL 4.3.
+- macOS (Apple Silicon) : Vulkan seulement, par KosmicKrisp (pilote Mesa de LunarG, Vulkan 1.4 conforme sur
+  Metal 4). OpenGL y est figé en 4.1 (pas de tampons de stockage ni de nuanceurs de calcul) et déprécié depuis
+  macOS 10.14 : le moteur OpenGL ne peut pas y tourner, le choix du moteur est masqué. Exigences : macOS 26,
+  puce M1 ou plus récente. Chargeur et pilote du SDK LunarG (1.4.363.0) dans `Contents/Frameworks`, manifeste
+  dans `Contents/Resources/vulkan/icd.d` (lu en premier par le chargeur), chargeur ouvert par chemin
+  (`Entry::load_from`) ; `tools/macos-sdk.sh`, `tools/macos-app.sh`. Pas de compte développeur Apple :
+  signature ad hoc, première ouverture par Réglages Système › Confidentialité et sécurité › « Ouvrir quand
+  même » (le clic droit › Ouvrir ne contourne plus Gatekeeper depuis macOS 15). Construit sur `macos-26` (CI)
+  sans essai de rendu : les machines virtuelles de GitHub n'offrent pas forcément Metal 4 ; à essayer sur un
+  Mac réel.
+- Version 0.2.0 : Windows x64 et macOS arm64, brouillon par `version.yml` (D-28), notes dans
+  `docs/notes-version.md`.

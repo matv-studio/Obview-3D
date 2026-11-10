@@ -1,6 +1,8 @@
 // Primitives de l'interface (voir paint.rs : Prim).
+#ifndef OBV_GL
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
+#endif
 
 struct Prim {
     vec4 rect;
@@ -13,12 +15,24 @@ struct Prim {
     vec4 params;
 };
 
+#ifdef OBV_GL
+// OpenGL 4.30 (D-30) : primitives dans un tampon lié, taille de l'écran en bloc uniforme.
+layout(std430, binding = 0) readonly buffer Prims { Prim p[]; } prims_b;
+layout(std140, binding = 0) uniform Push { vec2 screen; } pc;
+#define PRIM(i) prims_b.p[i]
+#define VERTEX_ID gl_VertexID
+#define INSTANCE_ID gl_InstanceID
+#else
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Prims { Prim p[]; };
 
 layout(push_constant, scalar) uniform Push {
     vec2 screen;
     Prims prims;
 } pc;
+#define PRIM(i) pc.prims.p[i]
+#define VERTEX_ID gl_VertexIndex
+#define INSTANCE_ID gl_InstanceIndex
+#endif
 
 const uint KIND_BOX = 0u;
 const uint KIND_SHADOW = 1u;

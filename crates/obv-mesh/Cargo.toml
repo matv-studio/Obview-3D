@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 obv-io = { path = "../obv-io" }
 meshopt = "0.7"
+obv-draco = { path = "../obv-draco" }
 rayon = "1.12"
 serde_json = "1"
 thiserror.workspace = true

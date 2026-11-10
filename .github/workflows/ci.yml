@@ -16,15 +16,16 @@ env:
 
 jobs:
   linux:
-    name: Linux (lavapipe)
+    name: Linux (lavapipe, llvmpipe)
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
-      - name: Vulkan logiciel et compilateur de shaders
+      - name: Vulkan et OpenGL logiciels, compilateur de shaders
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq mesa-vulkan-drivers glslang-tools vulkan-tools vulkan-validationlayers
+          sudo apt-get install -y -qq mesa-vulkan-drivers glslang-tools vulkan-tools vulkan-validationlayers \
+            libegl1 libegl-mesa0 libgl1-mesa-dri ninja-build
           vulkaninfo --summary | grep -E "deviceName|apiVersion|driverInfo"
       - uses: actions/cache/restore@v4
         id: occt
@@ -34,7 +35,6 @@ jobs:
       - name: OpenCASCADE (statique, D-27)
         if: steps.occt.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get install -y -qq ninja-build
           tools/occt.sh ~/occt
           rm -rf ~/occt-work
       # Gardé dès sa construction, même si une étape suivante échoue.
@@ -43,17 +43,35 @@ jobs:
         with:
           path: ~/occt
           key: occt-linux-${{ hashFiles('tools/occt.sh') }}
-      - name: Variables OpenCASCADE
+      - uses: actions/cache/restore@v4
+        id: draco
+        with:
+          path: ~/draco
+          key: draco-linux-${{ hashFiles('tools/draco.sh') }}
+      - name: Draco (statique, D-30)
+        if: steps.draco.outputs.cache-hit != 'true'
+        run: |
+          tools/draco.sh ~/draco
+          rm -rf ~/draco-work
+      - uses: actions/cache/save@v4
+        if: steps.draco.outputs.cache-hit != 'true'
+        with:
+          path: ~/draco
+          key: draco-linux-${{ hashFiles('tools/draco.sh') }}
+      - name: Variables des bibliothèques
         run: |
           echo "OCCT_DIR=$HOME/occt" >> "$GITHUB_ENV"
           echo "OBV_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
+          echo "DRACO_DIR=$HOME/draco" >> "$GITHUB_ENV"
+          echo "OBV_REQUIRE_DRACO=1" >> "$GITHUB_ENV"
+          echo "OBV_REQUIRE_GL=1" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh') }}
+          key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh', 'tools/draco.sh') }}
       - name: Format
         run: cargo fmt --all --check
       - name: Analyse (clippy)
@@ -105,18 +123,36 @@ jobs:
         with:
           path: C:\occt
           key: occt-windows-${{ hashFiles('tools/occt.sh') }}
-      - name: Variables OpenCASCADE
+      - uses: actions/cache/restore@v4
+        id: draco
+        with:
+          path: C:\draco
+          key: draco-windows-${{ hashFiles('tools/draco.sh') }}
+      - name: Draco (statique, D-30)
+        if: steps.draco.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          tools/draco.sh /c/draco
+          rm -rf /c/draco-work
+      - uses: actions/cache/save@v4
+        if: steps.draco.outputs.cache-hit != 'true'
+        with:
+          path: C:\draco
+          key: draco-windows-${{ hashFiles('tools/draco.sh') }}
+      - name: Variables des bibliothèques
         shell: bash
         run: |
           echo "OCCT_DIR=C:\occt" >> "$GITHUB_ENV"
           echo "OBV_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
+          echo "DRACO_DIR=C:\draco" >> "$GITHUB_ENV"
+          echo "OBV_REQUIRE_DRACO=1" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh') }}
+          key: windows-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh', 'tools/draco.sh') }}
       - name: Analyse (clippy)
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Construction
@@ -126,3 +162,86 @@ jobs:
         with:
           name: obview-windows
           path: target/release/obview.exe
+
+  macos:
+    name: macOS (Apple Silicon, KosmicKrisp)
+    runs-on: macos-26
+    timeout-minutes: 300
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
+      VULKAN_SDK_VERSION: 1.4.363.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: ~/VulkanSDK
+          key: vulkan-sdk-macos-${{ env.VULKAN_SDK_VERSION }}
+      - name: SDK Vulkan (chargeur, KosmicKrisp, glslangValidator)
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: tools/macos-sdk.sh "$VULKAN_SDK_VERSION" ~/VulkanSDK
+      - name: Outils
+        run: |
+          brew install ninja || true
+          echo "VULKAN_SDK=$HOME/VulkanSDK/macOS" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        id: occt
+        with:
+          path: ~/occt
+          key: occt-macos-${{ hashFiles('tools/occt.sh') }}
+      - name: OpenCASCADE (statique, D-27)
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: |
+          OCCT_JOBS=$(sysctl -n hw.ncpu) tools/occt.sh ~/occt
+          rm -rf ~/occt-work
+      - uses: actions/cache/save@v4
+        if: steps.occt.outputs.cache-hit != 'true'
+        with:
+          path: ~/occt
+          key: occt-macos-${{ hashFiles('tools/occt.sh') }}
+      - uses: actions/cache/restore@v4
+        id: draco
+        with:
+          path: ~/draco
+          key: draco-macos-${{ hashFiles('tools/draco.sh') }}
+      - name: Draco (statique, D-30)
+        if: steps.draco.outputs.cache-hit != 'true'
+        run: |
+          tools/draco.sh ~/draco
+          rm -rf ~/draco-work
+      - uses: actions/cache/save@v4
+        if: steps.draco.outputs.cache-hit != 'true'
+        with:
+          path: ~/draco
+          key: draco-macos-${{ hashFiles('tools/draco.sh') }}
+      - name: Variables des bibliothèques
+        run: |
+          echo "OCCT_DIR=$HOME/occt" >> "$GITHUB_ENV"
+          echo "OBV_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
+          echo "DRACO_DIR=$HOME/draco" >> "$GITHUB_ENV"
+          echo "OBV_REQUIRE_DRACO=1" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh', 'tools/draco.sh') }}
+      - name: Analyse (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Construction
+        run: cargo build --release -p obview
+      - name: Application
+        run: tools/macos-app.sh target/release/obview "$(cargo pkgid -p obview | sed 's/.*[#@]//')" "$VULKAN_SDK" dist
+      # Information seulement : les machines virtuelles de GitHub n'offrent pas forcément Metal 4.
+      - name: Pilote KosmicKrisp sur la machine de construction
+        continue-on-error: true
+        run: |
+          VK_DRIVER_FILES="dist/Obview 3D.app/Contents/Resources/vulkan/icd.d/libkosmickrisp_icd.json" \
+            "$VULKAN_SDK/bin/vulkaninfo" --summary
+      - name: Archive
+        run: ditto -c -k --keepParent "dist/Obview 3D.app" obview-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obview-macos
+          path: obview-macos.zip

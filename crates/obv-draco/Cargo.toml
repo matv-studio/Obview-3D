@@ -1,0 +1,16 @@
+[package]
+name = "obv-draco"
+description = "Compression Draco (KHR_draco_mesh_compression) par la bibliothèque de référence de Google."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cxx = "1.0.205"
+
+[build-dependencies]
+cxx-build = "1.0.205"
+
+[lints]
+workspace = true

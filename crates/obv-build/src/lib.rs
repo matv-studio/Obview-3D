@@ -2,6 +2,10 @@
 //!
 //! Chaque fichier `*.vert`, `*.frag`, `*.comp`, `*.task`, `*.mesh` du dossier donné devient
 //! `$OUT_DIR/<nom>.spv`. Les fichiers `*.glsl` sont des inclusions communes.
+//!
+//! Moteur OpenGL de secours (D-30) : les nuanceurs de sommets et de fragments sont aussi prétraités avec
+//! `OBV_GL` défini (inclusions développées, tampons par liaison au lieu des adresses) en GLSL 4.30 :
+//! `$OUT_DIR/<nom>.gl`, vérifié par glslangValidator à la construction et compilé par le pilote à l'exécution.
 
 use std::{
     env,
@@ -27,8 +31,17 @@ fn glslang() -> PathBuf {
     PathBuf::from("glslangValidator")
 }
 
-/// Compile tous les shaders de `dir` (relatif au crate appelant).
+/// Compile tous les shaders de `dir` (relatif au crate appelant), pour Vulkan seulement.
 pub fn compile_shaders(dir: &str) {
+    compile(dir, false);
+}
+
+/// Comme [`compile_shaders`], avec en plus les variantes OpenGL des nuanceurs de sommets et de fragments.
+pub fn compile_shaders_with_gl(dir: &str) {
+    compile(dir, true);
+}
+
+fn compile(dir: &str, with_gl: bool) {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let src = manifest.join(dir);
@@ -69,5 +82,48 @@ pub fn compile_shaders(dir: &str) {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        if with_gl && matches!(ext, "vert" | "frag") {
+            gl_variant(&tool, &src, &path, ext, &out.join(format!("{name}.gl")));
+        }
+    }
+}
+
+/// Variante OpenGL 4.30 d'un nuanceur : prétraitement avec `OBV_GL` (et `OBV_STAGE_FRAG` pour les fragments),
+/// lignes propres à Vulkan retirées, puis vérification.
+fn gl_variant(tool: &Path, src: &Path, path: &Path, ext: &str, dst: &Path) {
+    let name = path.file_name().unwrap().to_string_lossy();
+    let mut cmd = Command::new(tool);
+    cmd.args(["-E", "-DOBV_GL"]).arg(format!("-I{}", src.display()));
+    if ext == "frag" {
+        cmd.arg("-DOBV_STAGE_FRAG");
+    }
+    let output = cmd.arg(path).output().expect("glslangValidator");
+    if !output.status.success() {
+        panic!("échec du prétraitement OpenGL de {name}:\n{}", String::from_utf8_lossy(&output.stdout));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut gl = String::from("#version 430 core\n");
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("#version")
+            || t.starts_with("#line")
+            || t.starts_with("#extension GL_GOOGLE_include_directive")
+        {
+            continue;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        gl.push_str(line);
+        gl.push('\n');
+    }
+    std::fs::write(dst, &gl).unwrap_or_else(|e| panic!("{}: {e}", dst.display()));
+    // Vérification avec les définitions ajoutées à l'exécution (voir obv-gl).
+    let probe = dst.with_extension("gl.check");
+    std::fs::write(&probe, gl.replacen("#version 430 core\n", "#version 430 core\n#define OBV_DEPTH_REMAP 0.0\n", 1))
+        .unwrap_or_else(|e| panic!("{}: {e}", probe.display()));
+    let check = Command::new(tool).args(["-S", ext]).arg(&probe).output().expect("glslangValidator");
+    if !check.status.success() {
+        panic!("nuanceur OpenGL {name} invalide:\n{}\n--- source ---\n{gl}", String::from_utf8_lossy(&check.stdout));
     }
 }

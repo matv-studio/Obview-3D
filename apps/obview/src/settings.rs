@@ -6,6 +6,26 @@ use std::path::PathBuf;
 use obv_ui::{AccentScope, Color, Key, Modifiers, MouseButton, Theme, ThemeKind, tr};
 use serde::{Deserialize, Serialize};
 
+/// Moteur de rendu (D-30) : Vulkan d'abord, OpenGL en secours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RendererChoice {
+    #[default]
+    Auto,
+    Vulkan,
+    OpenGl,
+}
+
+impl RendererChoice {
+    pub const ALL: [RendererChoice; 3] = [RendererChoice::Auto, RendererChoice::Vulkan, RendererChoice::OpenGl];
+    pub fn label(self) -> &'static str {
+        match self {
+            RendererChoice::Auto => tr("Auto"),
+            RendererChoice::Vulkan => "Vulkan",
+            RendererChoice::OpenGl => "OpenGL",
+        }
+    }
+}
+
 /// Langue de l'interface (D-29) : anglais par défaut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Language {
@@ -257,6 +277,8 @@ impl Units {
 #[serde(default)]
 pub struct Settings {
     pub language: Language,
+    /// Moteur de rendu.
+    pub renderer: RendererChoice,
     pub theme: ThemeChoice,
     /// Transitions animées (fenêtres, menus, panneaux, vues de rendu) ; coupées : changements instantanés.
     pub animations: bool,
@@ -401,6 +423,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             language: Language::English,
+            renderer: RendererChoice::Auto,
             theme: ThemeChoice::Dark,
             animations: true,
             accent: None,

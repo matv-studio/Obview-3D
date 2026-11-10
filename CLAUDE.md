@@ -73,6 +73,13 @@ Dépôt
 - OpenCASCADE (D-27) : `tools/occt.sh /opt/occt` (sources clonées depuis GitHub, ~3 h sur 2 cœurs ; dossier
   déjà construit : rien à refaire), puis `export OCCT_DIR=/opt/occt` avant `cargo` ; sans cette variable,
   la lecture STEP / IGES est absente de la construction.
+- Draco (D-30) : `tools/draco.sh /opt/draco` (quelques minutes), puis `export DRACO_DIR=/opt/draco` ; sans elle,
+  la compression Draco est absente. `tools/verify.sh` se lance avec `OCCT_DIR` et `DRACO_DIR`.
+- OpenGL sans fenêtre pour les essais (D-30) : EGL et llvmpipe (`libegl1 libegl-mesa0 libgl1-mesa-dri`).
+- Vérifier la compilation pour macOS sans Mac : `rustup target add aarch64-apple-darwin`, puis
+  `cargo clippy --workspace --all-targets --target aarch64-apple-darwin` sans `OCCT_DIR` ni `DRACO_DIR`, avec
+  `CC_aarch64_apple_darwin` et `CXX_aarch64_apple_darwin` pointant vers un compilateur factice qui écrit des
+  objets vides (`clang -target arm64-apple-macos11 -x c /dev/null -c -o <sortie>`, le reste passé à clang).
 
 ## Carte du dépôt
 
@@ -80,11 +87,15 @@ Dépôt
 - `crates/obv-render` : rendu de la scène (géométrie en grappes, tri des grappes, ombrage, arêtes, sélection).
 - `crates/obv-ui` : bibliothèque d'interface maison (mise en page, widgets, texte, thèmes, info-bulles).
 - `crates/obv-cad` : lecture STEP / IGES (pont `cxx` vers OpenCASCADE, `cpp/reader.cpp`).
+- `crates/obv-draco` : pont `cxx` vers Draco (encodage, décodage).
+- `crates/obv-gl` : moteur OpenGL 4.3 de secours (scène, sélection, interface, cible, contexte EGL sans fenêtre).
+- `crates/obv-build` : compilation des nuanceurs (SPIR-V, et variantes OpenGL `*.gl` pour obv-render et obv-ui).
 - `crates/obv-io`, `crates/obv-mesh` : lecteurs des maillages, moteur de conversion ; voir `docs/ARCHITECTURE.md`.
 - `apps/obview` : l'application.
 - `docs/` : `ETAT.md`, `DECISIONS.md`, `ARCHITECTURE.md`.
 - `tools/` : vérification (`verify.sh`), construction d'OpenCASCADE (`occt.sh`).
-- `.github/workflows/` : `ci.yml` (Linux lavapipe, Windows), `version.yml` (brouillon de version Windows).
+- `.github/workflows/` : `ci.yml` (Linux lavapipe et llvmpipe, Windows, macOS 26 arm64),
+  `version.yml` (brouillon de version Windows et macOS, notes dans `docs/notes-version.md`).
 
 ## Pièges connus
 
@@ -99,6 +110,9 @@ Dépôt
   target/debug/obview --validation &`, puis `xdotool search --name "Obview 3D"` et `xdotool windowfocus <id>`
   (sans gestionnaire de fenêtres, le clavier n'arrive pas sinon) ; capture : `import -window root fichier.png`.
   `OBV_DEBUG_KEYS=1` affiche les touches reçues ; `OBV_DEBUG_LOAD=1` les étapes d'une ouverture et leur durée.
+  Moteur OpenGL : `--gl` (ou `OBV_RENDERER=opengl`), `--vulkan` ; `OBV_GL_DEBUG=1` affiche les messages du
+  pilote ; `OBV_GL_NO_CLIP_CONTROL=1` (toute valeur, même vide) force le chemin sans `glClipControl` ;
+  `OBV_REQUIRE_GL=1` fait échouer les essais OpenGL au lieu de les sauter (CI).
   Sous lavapipe, une image d'un gros modèle prend plusieurs centaines de ms : les transitions y semblent
   sautées et des clics rapprochés tombent dans la même image (les essais de capture prennent les transitions
   à mi-course par le champ `settle`).
