@@ -172,6 +172,20 @@ pub const EN: &[(&str, &str)] = &[
     ("Navigation", "Navigation"),
     ("Affichage", "Display"),
     ("Barre d'outils", "Toolbar"),
+    ("Mises à jour", "Updates"),
+    ("Mettre à jour", "Update"),
+    ("Installation", "Installing"),
+    ("Rechercher une version", "Look for a newer version"),
+    ("Vérifier", "Check"),
+    ("À jour", "Up to date"),
+    ("Vérification", "Checking"),
+    ("Notes", "Notes"),
+    ("Notes de version", "Release notes"),
+    ("Échec", "Failed"),
+    ("Réessayer", "Retry"),
+    ("Version", "Version"),
+    ("Dernière version", "Latest version"),
+    ("Rechercher au démarrage", "Check at startup"),
     ("Interface", "Interface"),
     ("Langue", "Language"),
     ("Thème", "Theme"),
@@ -275,6 +289,7 @@ pub const EN: &[(&str, &str)] = &[
 /// Textes passés à `tr` par une variable (non relevés par l'essai de complétude) : listés ici pour être vérifiés.
 #[cfg(test)]
 const INDIRECT: &[&str] = &[
+    "Mises à jour",
     "Avant",
     "Arrière",
     "Gauche",

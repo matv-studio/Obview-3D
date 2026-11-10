@@ -402,3 +402,45 @@ panneau latéral gauche, double-clic sur l'item dans la liste ouvre le panneau l
   sélection et panneau des propriétés ouvert (D-29 ouvrait directement les propriétés depuis la vue).
   Deux appuis arrivés dans une même image lente comptent comme double-clic, dans la vue comme dans la liste.
 - Version 0.2.1.
+
+## D-32 · Installateurs, mises à jour depuis l'application, thème sombre (10/11/2026)
+
+Demande : « Fais un installateur, pas un simple exe avec les dossiers. Et ajoute une fonction de détection et
+d'installation d'update directement depuis l'app. Mode sombre par défaut. » ; « fais également l'installateur
+Linux » ; « peux-tu utiliser le manifeste d'une app Windows pour éviter le warning d'installation ? ».
+
+- Windows : Inno Setup 6.7 (`packaging/windows/obview.iss`, `tools/inno.ps1` vérifie la signature Authenticode
+  de l'éditeur avant de l'installer en CI). Installation par utilisateur sans élévation (« tous les
+  utilisateurs » au choix), assistant sombre (`WizardStyle=modern dark`, Inno 6.6+), anglais et français,
+  menu Démarrer, icône de bureau facultative, « Ouvrir avec » pour les neuf extensions lues (sans prendre
+  l'association par défaut), désinstallation. Écartés : MSI (WiX ; installation par utilisateur malcommode),
+  MSIX (exige une signature reconnue), NSIS (équivalent, moins de styles).
+- Manifeste de l'exécutable (`apps/obview/build.rs`) : `asInvoker`, DPI par écran v2, chemins longs, Windows
+  10/11, contrôles communs 6. Il n'agit pas sur SmartScreen : l'avertissement à la première exécution d'un
+  fichier téléchargé dépend de la réputation (empreinte du fichier, éditeur signé). Depuis 2024 un certificat
+  EV ne la donne plus d'emblée ; seules la signature (OV, Azure Artifact Signing) avec accumulation de
+  réputation, ou le Microsoft Store, réduisent l'avertissement ; dépense, donc décision de l'utilisateur.
+  Les mises à jour téléchargées par l'application ne portent pas la marque « venu d'Internet » : pas
+  d'avertissement.
+- macOS : image disque (`tools/macos-dmg.sh`), application et raccourci vers Applications.
+- Linux : `.deb` (dans `/opt/obview-3d`, lien `/usr/bin/obview-3d`, menu, icônes, types MIME, dépendances par
+  `dpkg-shlibdeps` plus `libvulkan1`) et AppImage (`tools/linux-package.sh`), construits sur Ubuntu 22.04
+  (glibc 2.35) avec le glslangValidator du SDK LunarG (`tools/linux-sdk.sh`). Fenêtre nommée `obview-3d`
+  (classe X11, identifiant Wayland) comme le fichier .desktop.
+- Mises à jour (`apps/obview/src/update.rs`) : `GET /repos/matv-studio/Obview-3D/releases/latest` (versions
+  publiées seulement : les brouillons restent invisibles), comparaison au numéro de la construction, fichier
+  du système choisi par suffixe, téléchargé (ureq, rustls avec le magasin de certificats du système, proxy
+  des variables d'environnement) et vérifié par l'empreinte SHA-256 que GitHub calcule pour chaque fichier
+  (`digest`) ; sans empreinte, refus. Installation : Windows, installateur relancé en `/SILENT
+  /CLOSEAPPLICATIONS /RELAUNCH=1` (et `/ALLUSERS` ou `/CURRENTUSER` selon l'emplacement) ; macOS, `.app`
+  remplacé depuis l'image disque montée (sinon l'image s'ouvre) ; AppImage remplacée en place ; `.deb` par
+  `pkexec apt-get install` (sinon la logithèque s'ouvre) ; copie sans installateur : la page de la version
+  s'ouvre. L'application se ferme et se relance.
+- Interface : bouton « Mettre à jour » dans la barre du haut quand une version plus récente existe
+  (avancement circulaire pendant le téléchargement, état d'échec avec l'erreur en info-bulle) ; section
+  Réglages › Mises à jour (version, dernière version, notes, recherche manuelle, recherche au démarrage au
+  plus une fois par 20 h, désactivable). Une recherche automatique qui échoue (hors ligne) reste silencieuse.
+- Thème sombre : déjà par défaut ; la barre de titre de la fenêtre suit désormais le thème de l'interface
+  (sombre imposé, ou celle du système avec « Système ») ; révision 2 des réglages : un fichier antérieur
+  repasse une fois en sombre.
+- Flux de version : trois systèmes, brouillon du même numéro remplacé (demande « réutilise le n° 0.2.1 »).

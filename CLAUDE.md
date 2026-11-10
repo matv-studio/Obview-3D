@@ -94,9 +94,15 @@ Dépôt
 - `crates/obv-io`, `crates/obv-mesh` : lecteurs des maillages, moteur de conversion ; voir `docs/ARCHITECTURE.md`.
 - `apps/obview` : l'application.
 - `docs/` : `ETAT.md`, `DECISIONS.md`, `ARCHITECTURE.md`.
-- `tools/` : vérification (`verify.sh`), construction d'OpenCASCADE (`occt.sh`).
+- `tools/` : vérification (`verify.sh`), OpenCASCADE (`occt.sh`), Draco (`draco.sh`), SDK Vulkan
+  (`macos-sdk.sh`, `linux-sdk.sh`), Inno Setup (`inno.ps1`), paquets (`macos-app.sh`, `macos-dmg.sh`,
+  `linux-package.sh` ; `APPIMAGETOOL=none` : .deb seul, l'outil AppImage téléchargé est refusé dans la session).
+- `packaging/` : installateur Windows (`windows/obview.iss`), types MIME Linux.
+- Mises à jour : `apps/obview/src/update.rs` (essai réseau : `cargo test -p obview --lib recherche_reelle --
+  --ignored`).
 - `.github/workflows/` : `ci.yml` (Linux lavapipe et llvmpipe, Windows, macOS 26 arm64),
-  `version.yml` (brouillon de version Windows et macOS, notes dans `docs/notes-version.md`).
+  `version.yml` (installateurs Windows, macOS, Linux en brouillon, même numéro remplacé ; notes dans
+  `docs/notes-version.md`). CI : job `linux-paquets` sur Ubuntu 22.04.
 
 ## Pièges connus
 

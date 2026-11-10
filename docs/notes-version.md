@@ -1,21 +1,31 @@
 ## Téléchargements
 
-- **Windows 10 ou 11 (x64)** : `Obview-3D-<version>-windows-x64.zip`, à extraire, puis lancer « Obview 3D.exe ».
-  Vulkan 1.3 si le pilote l'offre, sinon OpenGL 4.3.
-- **macOS 26 ou plus, puce Apple M1 ou plus récente** : `Obview-3D-<version>-macos-arm64.zip`, à extraire, puis
-  glisser « Obview 3D.app » dans Applications. Vulkan par le pilote KosmicKrisp, livré dans l'application.
+- **Windows 10 ou 11 (x64)** : `Obview-3D-<version>-windows-x64-setup.exe`. Installation pour l'utilisateur, sans
+  droits d'administrateur (« tous les utilisateurs » au choix), menu Démarrer, « Ouvrir avec » pour les formats
+  lus, désinstallation depuis les Paramètres de Windows. Vulkan 1.3 si le pilote l'offre, sinon OpenGL 4.3.
+- **macOS 26 ou plus, puce Apple M1 ou plus récente** : `Obview-3D-<version>-macos-arm64.dmg`, ouvrir puis
+  glisser « Obview 3D » dans Applications. Vulkan par le pilote KosmicKrisp, livré dans l'application.
+- **Linux x86_64** : `obview-3d_<version>_amd64.deb` (Debian 12, Ubuntu 22.04 et plus récents ; menu des
+  applications) ou `Obview-3D-<version>-linux-x86_64.AppImage` (toutes distributions, fichier à rendre
+  exécutable). Pilote Vulkan (Mesa ou constructeur) ou OpenGL 4.3.
 
-## Première ouverture sur macOS
+Les versions suivantes s'installent depuis l'application (bouton « Mettre à jour » de la barre du haut, ou
+Réglages › Mises à jour).
 
-L'application n'est pas signée par un compte développeur Apple. macOS la bloque à la première ouverture :
+## Première ouverture
 
-1. Ouvrir « Obview 3D.app » une fois, puis fermer le message.
-2. Réglages Système → Confidentialité et sécurité → section Sécurité → « Ouvrir quand même », puis confirmer
-   avec le mot de passe ou Touch ID.
-
-Le bouton reste affiché environ une heure après la tentative d'ouverture. Les ouvertures suivantes sont normales.
+- **Windows** : l'installateur n'est pas signé ; SmartScreen affiche « Windows a protégé votre ordinateur » :
+  « Informations complémentaires » puis « Exécuter quand même ». Les mises à jour faites depuis l'application
+  ne passent pas par cet avertissement.
+- **macOS** : l'application n'est pas signée par un compte développeur Apple. Ouvrir « Obview 3D » une fois,
+  fermer le message, puis Réglages Système → Confidentialité et sécurité → section Sécurité → « Ouvrir quand
+  même » (bouton affiché environ une heure après la tentative), confirmer par mot de passe ou Touch ID.
 
 ## Nouveautés de 0.2.1
+
+- Installateurs Windows, macOS et Linux ; mises à jour détectées et installées depuis l'application (empreinte
+  SHA-256 vérifiée), recherche au démarrage au plus une fois par jour, désactivable.
+- Thème sombre par défaut, barre de titre de la fenêtre comprise.
 
 - Rotation autour de l'objet par défaut (centre du modèle, ou de la pièce cadrée par Focus) ; la rotation
   autour du point visé reste au choix dans Réglages › Navigation.

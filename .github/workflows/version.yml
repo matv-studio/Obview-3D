@@ -1,14 +1,16 @@
 name: Version
 
-# Construit Obview 3D pour Windows (x64) et macOS (Apple Silicon, KosmicKrisp), OpenCASCADE et Draco liés
-# statiquement, et prépare un brouillon de version GitHub avec les deux archives. La publication reste un geste
-# de l'utilisateur (D-28).
+# Construit les installateurs d'Obview 3D (D-32) : Windows x64 (Inno Setup), macOS Apple Silicon (image disque,
+# KosmicKrisp), Linux x86_64 (.deb et AppImage, construits sur Ubuntu 22.04) ; OpenCASCADE et Draco liés
+# statiquement. Prépare un brouillon de version GitHub avec ces fichiers ; un brouillon existant du même numéro
+# est remplacé. La publication reste un geste de l'utilisateur (D-28) ; l'application ne voit que les versions
+# publiées.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Numéro de version (ex. 0.2.0)"
+        description: "Numéro de version (ex. 0.2.1)"
         required: true
 
 permissions:
@@ -17,10 +19,11 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  INNO_VERSION: 6.7.4
 
 jobs:
   windows:
-    name: Windows (version)
+    name: Windows (installateur)
     runs-on: windows-2022
     timeout-minutes: 300
     env:
@@ -43,6 +46,15 @@ jobs:
           $url = "https://sdk.lunarg.com/sdk/download/1.4.335.0/windows/vulkansdk-windows-X64-1.4.335.0.exe"
           Invoke-WebRequest -Uri $url -OutFile vulkansdk.exe
           Start-Process -FilePath .\vulkansdk.exe -ArgumentList "--root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install copy_only=1" -Wait -NoNewWindow
+      - uses: actions/cache@v4
+        id: inno
+        with:
+          path: C:\InnoSetup
+          key: innosetup-${{ env.INNO_VERSION }}
+      - name: Inno Setup
+        if: steps.inno.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: tools/inno.ps1 $env:INNO_VERSION C:\InnoSetup
       - uses: actions/cache/restore@v4
         id: occt
         with:
@@ -77,25 +89,23 @@ jobs:
           key: draco-windows-${{ hashFiles('tools/draco.sh') }}
       - name: Construction
         run: cargo build --release -p obview
-      - name: Archive
+      - name: Installateur
         shell: pwsh
         run: |
-          $v = "${{ inputs.version }}"
-          $dir = "Obview-3D-$v-windows-x64"
-          New-Item -ItemType Directory $dir | Out-Null
-          Copy-Item target/release/obview.exe "$dir/Obview 3D.exe"
-          New-Item -ItemType Directory "$dir/licences" | Out-Null
-          Copy-Item crates/obv-ui/assets/fonts/OFL-geist.txt "$dir/licences/Geist-OFL.txt"
-          Copy-Item C:\occt\licence\* "$dir/licences/"
-          Copy-Item C:\draco\LICENSE-draco "$dir/licences/Draco-Apache-2.0.txt"
-          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+          New-Item -ItemType Directory licences | Out-Null
+          Copy-Item crates/obv-ui/assets/fonts/OFL-geist.txt licences/Geist-OFL.txt
+          Copy-Item C:\occt\licence\* licences/
+          Copy-Item C:\draco\LICENSE-draco licences/Draco-Apache-2.0.txt
+          & C:\InnoSetup\ISCC.exe /Q "/DAppVersion=${{ inputs.version }}" "/DSourceExe=$PWD\target\release\obview.exe" "/DLicDir=$PWD\licences" "/DOutputDir=$PWD\dist" packaging\windows\obview.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem dist
       - uses: actions/upload-artifact@v4
         with:
           name: version-windows
-          path: Obview-3D-*-windows-x64.zip
+          path: dist/*.exe
 
   macos:
-    name: macOS Apple Silicon (version)
+    name: macOS Apple Silicon (image disque)
     runs-on: macos-26
     timeout-minutes: 300
     env:
@@ -151,30 +161,108 @@ jobs:
           key: draco-macos-${{ hashFiles('tools/draco.sh') }}
       - name: Construction
         run: cargo build --release -p obview
-      - name: Application et archive
+      - name: Application et image disque
         run: |
           v="${{ inputs.version }}"
           tools/macos-app.sh target/release/obview "$v" "$VULKAN_SDK" dist
-          ditto -c -k --keepParent "dist/Obview 3D.app" "Obview-3D-$v-macos-arm64.zip"
+          tools/macos-dmg.sh "dist/Obview 3D.app" "Obview-3D-$v-macos-arm64.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: version-macos
-          path: Obview-3D-*-macos-arm64.zip
+          path: Obview-3D-*-macos-arm64.dmg
+
+  linux:
+    name: Linux x86_64 (.deb, AppImage)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    env:
+      VULKAN_SDK_VERSION: 1.4.363.0
+      OBV_REQUIRE_OCCT: "1"
+      OBV_REQUIRE_DRACO: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Outils
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build dpkg-dev
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: ~/VulkanSDK
+          key: vulkan-sdk-linux-${{ env.VULKAN_SDK_VERSION }}
+      - name: SDK Vulkan (glslangValidator)
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: tools/linux-sdk.sh "$VULKAN_SDK_VERSION" ~/VulkanSDK
+      - name: Variables
+        run: |
+          echo "VULKAN_SDK=$HOME/VulkanSDK/$VULKAN_SDK_VERSION/x86_64" >> "$GITHUB_ENV"
+          echo "OCCT_DIR=$HOME/occt" >> "$GITHUB_ENV"
+          echo "DRACO_DIR=$HOME/draco" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        id: occt
+        with:
+          path: ~/occt
+          key: occt-linux2204-${{ hashFiles('tools/occt.sh') }}
+      - name: OpenCASCADE (statique, D-27)
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: |
+          tools/occt.sh ~/occt
+          rm -rf ~/occt-work
+      - uses: actions/cache/save@v4
+        if: steps.occt.outputs.cache-hit != 'true'
+        with:
+          path: ~/occt
+          key: occt-linux2204-${{ hashFiles('tools/occt.sh') }}
+      - uses: actions/cache/restore@v4
+        id: draco
+        with:
+          path: ~/draco
+          key: draco-linux2204-${{ hashFiles('tools/draco.sh') }}
+      - name: Draco (statique, D-30)
+        if: steps.draco.outputs.cache-hit != 'true'
+        run: |
+          tools/draco.sh ~/draco
+          rm -rf ~/draco-work
+      - uses: actions/cache/save@v4
+        if: steps.draco.outputs.cache-hit != 'true'
+        with:
+          path: ~/draco
+          key: draco-linux2204-${{ hashFiles('tools/draco.sh') }}
+      - name: Construction
+        run: cargo build --release -p obview
+      - name: Paquets
+        run: |
+          mkdir -p licences
+          cp crates/obv-ui/assets/fonts/OFL-geist.txt licences/Geist-OFL.txt
+          cp ~/occt/licence/* licences/
+          cp ~/draco/LICENSE-draco licences/Draco-Apache-2.0.txt
+          tools/linux-package.sh target/release/obview "${{ inputs.version }}" licences dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: version-linux
+          path: |
+            dist/*.deb
+            dist/*.AppImage
 
   brouillon:
     name: Brouillon de version
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: archives
+          path: fichiers
           merge-multiple: true
       - name: Brouillon
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${{ inputs.version }}"
-          gh release create "v$v" archives/*.zip --draft --target "$GITHUB_SHA" --title "Obview 3D $v" \
+          # Brouillon du même numéro : remplacé (les versions publiées ne sont jamais touchées).
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .tag_name == \"v$v\") | .id"); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          ls -la fichiers
+          gh release create "v$v" fichiers/* --draft --target "$GITHUB_SHA" --title "Obview 3D $v" \
             --notes-file docs/notes-version.md

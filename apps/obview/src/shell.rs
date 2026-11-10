@@ -69,6 +69,11 @@ pub struct AppState {
     pub left_open: bool,
     /// Pièce à amener dans la liste (double-clic dans la vue) : défilement dès que la liste est mesurée.
     pub reveal: Option<usize>,
+    /// Mises à jour (D-32) : état et demande de l'interface, traitée par l'application.
+    pub update: crate::update::Status,
+    /// Version affichée dans les réglages (celle de la construction ; fixée par les essais de capture).
+    pub app_version: &'static str,
+    pub update_request: Option<crate::update::Action>,
     /// Appuis gauches reçus depuis l'image précédente (deux appuis dans une même image lente : double-clic).
     pub left_presses: u8,
     pub right_open: bool,
@@ -157,6 +162,9 @@ impl AppState {
             inspector_cuts: inspector::target_cuts(Inspector::Off),
             left_open: false,
             reveal: None,
+            update: Default::default(),
+            app_version: crate::update::CURRENT,
+            update_request: None,
             left_presses: 0,
             right_open: false,
             scene_bounds: model.bounds(),
@@ -224,6 +232,67 @@ pub fn spinner(ui: &mut Ui, size: f32, color: Color) -> Node {
     .size(Size::Px(size), Size::Px(size))
 }
 
+/// Avancement circulaire (0 à 1) : piste discrète, arc plein.
+pub fn progress_ring(ui: &Ui, size: f32, fraction: f32, color: Color) -> Node {
+    let track = ui.theme.color.track;
+    Node::custom(move |p, r| {
+        let c = r.center();
+        let radius = size * 0.5 - 1.5;
+        let seg = 48;
+        let point = |k: f32| {
+            let a = -std::f32::consts::FRAC_PI_2 + k * std::f32::consts::TAU;
+            obv_ui::vec2(c.x + radius * a.cos(), c.y + radius * a.sin())
+        };
+        for i in 0..seg {
+            let (a, b) = (i as f32 / seg as f32, (i + 1) as f32 / seg as f32);
+            p.dl.line(point(a), point(b), 1.5, track);
+        }
+        let n = (fraction.clamp(0.0, 1.0) * seg as f32).ceil() as usize;
+        for i in 0..n {
+            let a = i as f32 / seg as f32;
+            let b = ((i + 1) as f32 / seg as f32).min(fraction);
+            p.dl.line(point(a), point(b), 1.5, color);
+        }
+    })
+    .size(Size::Px(size), Size::Px(size))
+}
+
+/// Bouton de mise à jour de la barre du haut (D-32) : seulement quand une version plus récente est publiée.
+fn update_pill(ui: &mut Ui, s: &AppState) -> Option<Node> {
+    use crate::update::Status;
+    let release = s.update.release()?;
+    let c = ui.theme.color.clone();
+    let m = ui.theme.size.clone();
+    let id = Id::new("mise à jour");
+    let hover = ui.anim(id.with("survol"), if ui.hovered(id) { 1.0 } else { 0.0 }, 120.0);
+    let mark = if c.has_accent { c.accent } else { c.set_text };
+    let tip = format!("Obview 3D {}", release.version);
+    let (icon, label, tooltip) = match &s.update {
+        Status::Downloading(_, f) => {
+            (progress_ring(ui, 14.0, *f, mark), i18n::with_unit(&format!("{}", (f * 100.0).floor() as u32), "%"), tip)
+        }
+        Status::Installing(_) => (spinner(ui, 14.0, mark), tr("Installation").to_string(), tip),
+        Status::Failed { error, .. } => {
+            (Node::icon("alert", m.icon, c.danger), tr("Mettre à jour").to_string(), format!("{tip} · {error}"))
+        }
+        _ => (Node::icon("update", m.icon, mark), tr("Mettre à jour").to_string(), tip),
+    };
+    let bg = if ui.pressed(id) { c.surface_active } else { c.raised.mix(c.raised_hover, hover) };
+    Some(
+        Node::row()
+            .id(id)
+            .tooltip(&tooltip)
+            .height(Size::Px(m.control_height))
+            .padding(Edges::xy(10.0, 0.0))
+            .gap(6.0)
+            .radius(m.radius_control)
+            .bg(bg)
+            .border(1.0, c.border_strong.mix(c.text_tertiary, hover))
+            .child(icon)
+            .child(Node::text(label, TextStyle::new(m.font_size, Weight::Medium), c.text)),
+    )
+}
+
 fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let c = ui.theme.color.clone();
     let m = ui.theme.size.clone();
@@ -262,8 +331,10 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let dark = s.theme_kind() == ThemeKind::Dark;
     let theme_icon = if dark { "sun" } else { "moon" };
     let theme_tip = tr(if dark { "Thème clair" } else { "Thème sombre" });
+    let pill = update_pill(ui, s);
     let right = Node::row()
         .gap(6.0)
+        .children(pill.map(|p| [p, Node::new().size(Size::Px(4.0), Size::Px(1.0))]).into_iter().flatten())
         .child(
             widgets::small_icon_button(ui, theme_id, theme_icon, theme_tip, c.icon)
                 .size(Size::Px(28.0), Size::Px(28.0)),
@@ -731,6 +802,13 @@ fn handle_grips(ui: &mut Ui, s: &mut AppState) {
 pub fn handle(ui: &mut Ui, s: &mut AppState) {
     crate::lang::init();
     i18n::set_lang(s.settings.language.lang());
+    // Mise à jour (D-32) : télécharger et installer, réessayer après un échec ; rien pendant le téléchargement.
+    if ui.clicked(Id::new("mise à jour"))
+        && matches!(s.update, crate::update::Status::Available(_) | crate::update::Status::Failed { .. })
+    {
+        s.update_request = Some(crate::update::Action::Install);
+        ui.keep_animating();
+    }
     if ui.clicked(Id::new("thème")) {
         s.settings.theme = if s.theme_kind() == ThemeKind::Dark { ThemeChoice::Light } else { ThemeChoice::Dark };
         s.settings_dirty = true;

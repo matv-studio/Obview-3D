@@ -38,5 +38,6 @@ pub(crate) static ICONS: &[(&str, &str)] = &[
     ("toolbar", include_str!("../assets/icons/toolbar.svg")),
     ("trash", include_str!("../assets/icons/trash.svg")),
     ("triangle", include_str!("../assets/icons/triangle.svg")),
+    ("update", include_str!("../assets/icons/update.svg")),
     ("vertex", include_str!("../assets/icons/vertex.svg")),
 ];

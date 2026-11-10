@@ -304,10 +304,15 @@ pub struct Settings {
     /// Largeur des panneaux latéraux, 200 à 520 px (charte).
     pub left_width: f32,
     pub right_width: f32,
+    /// Recherche des mises à jour au démarrage, au plus une fois par jour (D-32).
+    pub check_updates: bool,
+    /// Dernière recherche de mise à jour, en secondes depuis 1970.
+    pub last_update_check: u64,
 }
 
-/// Révision courante du fichier de réglages. 1 : rotation autour de l'objet par défaut (D-31).
-pub const REVISION: u32 = 1;
+/// Révision courante du fichier de réglages. 1 : rotation autour de l'objet par défaut (D-31) ; 2 : thème
+/// sombre par défaut (D-32).
+pub const REVISION: u32 = 2;
 
 /// Largeurs permises des panneaux latéraux (charte : poignée de largeur 200–520 px).
 pub const PANEL_MIN: f32 = 200.0;
@@ -445,6 +450,8 @@ impl Default for Settings {
             toolbar_hidden: Vec::new(),
             left_width: 260.0,
             right_width: 280.0,
+            check_updates: true,
+            last_update_check: 0,
         }
     }
 }
@@ -497,6 +504,10 @@ impl Settings {
         // Révision 1 (D-31) : rotation autour de l'objet, y compris pour un fichier écrit avant ce choix.
         if self.revision < 1 {
             self.orbit_around_cursor = false;
+        }
+        // Révision 2 (D-32) : thème sombre, y compris pour un fichier écrit avant ce choix.
+        if self.revision < 2 {
+            self.theme = ThemeChoice::Dark;
         }
         self.revision = REVISION;
         self.accent = self.accent.map(|a| a & 0xff_ffff);
@@ -570,6 +581,15 @@ mod tests {
         // Choix fait après la révision 1 : conservé.
         let new: Settings = serde_json::from_str(r#"{"revision":1,"orbit_around_cursor":true}"#).unwrap();
         assert!(new.sanitized().orbit_around_cursor);
+    }
+
+    #[test]
+    fn theme_sombre_par_defaut() {
+        assert_eq!(Settings::default().theme, ThemeChoice::Dark);
+        let old: Settings = serde_json::from_str(r#"{"revision":1,"theme":"Light"}"#).unwrap();
+        assert_eq!(old.sanitized().theme, ThemeChoice::Dark);
+        let new: Settings = serde_json::from_str(r#"{"revision":2,"theme":"Light"}"#).unwrap();
+        assert_eq!(new.sanitized().theme, ThemeChoice::Light);
     }
 
     #[test]

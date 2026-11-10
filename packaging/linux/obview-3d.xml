@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Types MIME des formats d'Obview 3D absents de certaines versions de shared-mime-info (D-32). -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="model/step">
+    <comment>STEP 3D model</comment>
+    <glob pattern="*.step"/>
+    <glob pattern="*.stp"/>
+  </mime-type>
+  <mime-type type="model/iges">
+    <comment>IGES 3D model</comment>
+    <glob pattern="*.iges"/>
+    <glob pattern="*.igs"/>
+  </mime-type>
+  <mime-type type="model/stl">
+    <comment>STL 3D model</comment>
+    <glob pattern="*.stl"/>
+  </mime-type>
+  <mime-type type="model/obj">
+    <comment>OBJ 3D model</comment>
+    <glob pattern="*.obj"/>
+  </mime-type>
+  <mime-type type="model/gltf-binary">
+    <comment>glTF binary 3D model</comment>
+    <glob pattern="*.glb"/>
+  </mime-type>
+  <mime-type type="model/gltf+json">
+    <comment>glTF 3D model</comment>
+    <glob pattern="*.gltf"/>
+  </mime-type>
+  <mime-type type="application/x-fbx">
+    <comment>FBX 3D model</comment>
+    <glob pattern="*.fbx"/>
+  </mime-type>
+</mime-info>

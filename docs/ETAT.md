@@ -3,7 +3,7 @@
 Mis à jour : 10/11/2026.
 
 ## Fait
-- Décisions D-01 à D-31 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-32 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -61,6 +61,8 @@ Mis à jour : 10/11/2026.
 - D-31 : rotation autour de l'objet cadré par défaut (centre de rotation propre à la caméra, révision des
   réglages) ; double-clic dans la vue → liste des pièces ouverte et centrée sur la pièce ; double-clic dans la
   liste → propriétés. Version 0.2.1.
+- D-32 : installateurs Windows (Inno Setup), macOS (.dmg), Linux (.deb, AppImage) ; mises à jour depuis
+  l'application (GitHub, SHA-256, installation et relance) ; barre de titre au thème ; révision 2 (sombre).
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes

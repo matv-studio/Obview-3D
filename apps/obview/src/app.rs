@@ -34,6 +34,7 @@ use crate::{
     settings::{RendererChoice, Settings},
     shell::{self, AppState, Tool},
     tools::{self, CaptureSize, MeasurePoint, Snap},
+    update,
     views::ViewStore,
 };
 
@@ -60,6 +61,13 @@ struct Pending {
 pub struct Wake;
 
 type Loaded = (PathBuf, Result<Model, String>);
+
+/// Réponses du fil des mises à jour (D-32).
+enum UpdateMsg {
+    Checked(Result<Option<update::Release>, String>, bool),
+    Progress(f32),
+    Installed(update::Release, Result<bool, String>),
+}
 type Converted = Result<(obv_mesh::Report, PathBuf), String>;
 
 pub struct App {
@@ -98,6 +106,12 @@ pub struct App {
     applied_renderer: RendererChoice,
     /// Appuis gauches reçus dans l'image de l'appui en cours.
     press_burst: u8,
+    /// Fil des mises à jour en cours (recherche, ou téléchargement puis installation).
+    updating: Option<Receiver<UpdateMsg>>,
+    /// Installation lancée : fermeture après l'image en cours.
+    quit: bool,
+    /// Thème imposé à la barre de titre de la fenêtre (`None` : celui du système).
+    window_theme: Option<WinTheme>,
 }
 
 /// Lit un fichier : STEP / IGES par OpenCASCADE (D-27), les maillages par les lecteurs d'Obview.
@@ -159,6 +173,9 @@ impl App {
             measure_at: None,
             last_click: None,
             press_burst: 0,
+            updating: None,
+            quit: false,
+            window_theme: None,
             applied_renderer: RendererChoice::Auto,
         };
         app.state.views.list = app.views.0.get(&app.file_key).cloned().unwrap_or_default();
@@ -208,6 +225,7 @@ impl App {
         s.viewport = self.state.viewport.clone();
         s.inspector = self.state.inspector;
         s.renderer = self.state.renderer.clone();
+        s.update = self.state.update.clone();
         self.file_key = std::fs::canonicalize(&path).unwrap_or(path).to_string_lossy().into_owned();
         s.views.list = self.views.0.get(&self.file_key).cloned().unwrap_or_default();
         self.state = s;
@@ -218,7 +236,115 @@ impl App {
     }
 
     /// Réponses des fils de travail.
+    /// Recherche de mise à jour dans un fil ; `manual` : demandée depuis les réglages.
+    fn start_update_check(&mut self, manual: bool) {
+        if self.updating.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(UpdateMsg::Checked(update::check(), manual));
+            let _ = proxy.send_event(Wake);
+        });
+        self.updating = Some(rx);
+        self.state.update = update::Status::Checking { manual };
+    }
+
+    /// Télécharge et installe la version proposée ; sans fichier installable, ouvre sa page.
+    fn start_update_install(&mut self) {
+        let Some(release) = self.state.update.release().cloned() else { return };
+        let how = update::install_kind();
+        let Some(asset) = release.asset.clone().filter(|_| how != update::Install::Manual) else {
+            let _ = update::open_path(&release.page);
+            return;
+        };
+        if self.updating.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let proxy = self.proxy.clone();
+        let r = release.clone();
+        std::thread::spawn(move || {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let mut last = Instant::now();
+            let mut on_progress = |f: f32| {
+                // Au plus dix réveils par seconde : l'image suit sans tourner en continu.
+                if last.elapsed().as_millis() >= 100 {
+                    last = Instant::now();
+                    let _ = tx.send(UpdateMsg::Progress(f));
+                    let _ = proxy.send_event(Wake);
+                }
+            };
+            let result = update::download(&asset, &mut on_progress, &cancel).and_then(|file| {
+                let _ = tx.send(UpdateMsg::Progress(1.0));
+                let _ = proxy.send_event(Wake);
+                update::install(&file, &how)
+            });
+            let _ = tx.send(UpdateMsg::Installed(r, result));
+            let _ = proxy.send_event(Wake);
+        });
+        self.updating = Some(rx);
+        self.state.update = update::Status::Downloading(release, 0.0);
+    }
+
+    fn poll_update(&mut self) {
+        if let Some(action) = self.state.update_request.take() {
+            match action {
+                update::Action::Check => self.start_update_check(true),
+                update::Action::Install => self.start_update_install(),
+                update::Action::OpenPage => {
+                    if let Some(r) = self.state.update.release() {
+                        let _ = update::open_path(&r.page);
+                    }
+                }
+            }
+        }
+        let Some(rx) = &self.updating else { return };
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                UpdateMsg::Checked(r, manual) => {
+                    self.updating = None;
+                    if r.is_ok() {
+                        self.state.settings.last_update_check = unix_now();
+                        self.state.settings_dirty = true;
+                    }
+                    self.state.update = match r {
+                        Ok(Some(rel)) => update::Status::Available(rel),
+                        Ok(None) => update::Status::Current,
+                        Err(error) if manual => update::Status::Failed { release: None, error },
+                        // Recherche automatique : un échec (hors ligne) reste silencieux.
+                        Err(_) => update::Status::Idle,
+                    };
+                    return;
+                }
+                UpdateMsg::Progress(f) => {
+                    if let update::Status::Downloading(r, _) = &self.state.update {
+                        self.state.update = if f >= 1.0 {
+                            update::Status::Installing(r.clone())
+                        } else {
+                            update::Status::Downloading(r.clone(), f)
+                        };
+                    }
+                }
+                UpdateMsg::Installed(rel, r) => {
+                    self.updating = None;
+                    match r {
+                        Ok(true) => {
+                            self.state.update = update::Status::Installing(rel);
+                            self.quit = true;
+                        }
+                        Ok(false) => self.state.update = update::Status::Available(rel),
+                        Err(error) => self.state.update = update::Status::Failed { release: Some(rel), error },
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     fn poll_jobs(&mut self) {
+        self.poll_update();
         // Modèle reçu à l'image précédente (carte « Préparation » montrée) : installé maintenant.
         if let Some((_, _, shown)) = &self.ready
             && *shown
@@ -440,10 +566,11 @@ impl App {
     fn init_graphics(&mut self, el: &ActiveEventLoop) -> Result<(), String> {
         let attrs = Window::default_attributes()
             .with_title("Obview 3D")
+            .with_theme(window_theme(&self.state.settings))
             .with_inner_size(LogicalSize::new(1600.0, 900.0))
             .with_min_inner_size(LogicalSize::new(960.0, 600.0))
             .with_window_icon(window_icon());
-        self.create_gfx(el, attrs)
+        self.create_gfx(el, with_app_id(attrs))
     }
 
     /// Moteur choisi : réglage, sauf `--gl` / `--vulkan` ou `OBV_RENDERER` (essais).
@@ -470,7 +597,10 @@ impl App {
                 detail: e,
             });
         }
-        self.state.system_dark = gfx.window.theme().is_none_or(|t| t == WinTheme::Dark);
+        self.window_theme = window_theme(&self.state.settings);
+        if self.window_theme.is_none() {
+            self.state.system_dark = gfx.window.theme().is_none_or(|t| t == WinTheme::Dark);
+        }
         self.state.renderer = (gfx.backend, gfx.description.clone());
         self.applied_renderer = self.state.settings.renderer;
         self.gfx = Some(gfx);
@@ -488,6 +618,7 @@ impl App {
         let size = w.inner_size();
         let mut attrs = Window::default_attributes()
             .with_title("Obview 3D")
+            .with_theme(window_theme(&self.state.settings))
             .with_inner_size(size)
             .with_min_inner_size(LogicalSize::new(960.0, 600.0))
             .with_maximized(w.is_maximized())
@@ -496,7 +627,7 @@ impl App {
             attrs = attrs.with_position(pos);
         }
         drop(old);
-        if let Err(e) = self.create_gfx(el, attrs) {
+        if let Err(e) = self.create_gfx(el, with_app_id(attrs)) {
             eprintln!("Obview 3D : {e}");
             el.exit();
             return;
@@ -548,6 +679,14 @@ impl App {
         self.ui.begin_frame(input.clone());
         // Appuis gauches cumulés pendant l'appui en cours, gardés jusqu'à l'image du relâchement (clic lu par
         // l'interface) : deux appuis dans une image lente forment un double-clic.
+        let want = window_theme(&self.state.settings);
+        if want != self.window_theme {
+            gfx.window.set_theme(want);
+            self.window_theme = want;
+            if want.is_none() {
+                self.state.system_dark = gfx.window.theme().is_none_or(|t| t == WinTheme::Dark);
+            }
+        }
         self.state.left_presses = if input.buttons[0] && !prev_buttons[0] {
             burst
         } else if input.buttons[0] || prev_buttons[0] {
@@ -774,6 +913,33 @@ fn focus(nav: &mut Navigator, state: &AppState, model: &Model, view: obv_ui::Rec
     }
 }
 
+/// Barre de titre de la fenêtre au thème de l'interface (sombre par défaut, D-32) ; « Système » : celle du
+/// système, qui suit ses changements.
+fn window_theme(s: &Settings) -> Option<WinTheme> {
+    match s.theme {
+        crate::settings::ThemeChoice::Dark => Some(WinTheme::Dark),
+        crate::settings::ThemeChoice::Light => Some(WinTheme::Light),
+        crate::settings::ThemeChoice::System => None,
+    }
+}
+
+/// Linux : classe de fenêtre X11 et identifiant Wayland `obview-3d`, ceux du fichier .desktop des paquets
+/// (icône et regroupement dans la barre des tâches, D-32).
+fn with_app_id(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    #[cfg(target_os = "linux")]
+    {
+        let attrs = winit::platform::x11::WindowAttributesExtX11::with_name(attrs, "obview-3d", "obview-3d");
+        winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, "obview-3d", "obview-3d")
+    }
+    #[cfg(not(target_os = "linux"))]
+    attrs
+}
+
+/// Secondes depuis 1970.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
 fn to_srgb8(c: obv_ui::Color) -> [u8; 4] {
     let h = c.to_hex();
     [(h >> 16) as u8, (h >> 8) as u8, h as u8, 255]
@@ -866,6 +1032,11 @@ impl ApplicationHandler<Wake> for App {
             }
             if let Some(g) = &self.gfx {
                 g.window.request_redraw();
+            }
+            // Recherche automatique : au plus une fois par jour (D-32).
+            let s = &self.state.settings;
+            if s.check_updates && unix_now().saturating_sub(s.last_update_check) >= 20 * 3600 {
+                self.start_update_check(false);
             }
         }
     }
@@ -961,6 +1132,13 @@ impl ApplicationHandler<Wake> for App {
             WindowEvent::HoveredFileCancelled => self.state.drop_hover = false,
             WindowEvent::RedrawRequested => {
                 self.redraw();
+                // Mise à jour installée ou lancée : réglages enregistrés, application fermée (relancée ensuite).
+                if self.quit {
+                    let _ = self.state.settings.save();
+                    let _ = self.views.save();
+                    el.exit();
+                    return;
+                }
                 // Moteur changé dans les réglages : bascule après l'image.
                 if self.state.settings.renderer != self.applied_renderer {
                     self.switch_renderer(el);

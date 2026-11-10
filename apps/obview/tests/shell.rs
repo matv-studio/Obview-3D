@@ -282,6 +282,62 @@ fn reglages_barre_et_affichage() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
+/// Version fictive proposée par les captures des mises à jour.
+fn release() -> obview::update::Release {
+    use obview::update::{Asset, Release, Version};
+    Release {
+        version: Version(0, 3, 0),
+        page: String::new(),
+        asset: Some(Asset {
+            name: "Obview-3D-0.3.0-windows-x64-setup.exe".into(),
+            url: String::new(),
+            size: 1,
+            sha256: None,
+        }),
+    }
+}
+
+/// Mises à jour (D-32) : réglages avec une version proposée (bouton survolé), barre du haut pendant le
+/// téléchargement, après un échec.
+#[test]
+fn mises_a_jour_deux_themes() {
+    use obview::update::Status;
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let settings = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 4;
+            s.app_version = "0.2.1";
+            s.update = Status::Available(release());
+        },
+        hover: Some(Id::new("réglages").with("maj installer")),
+        tooltip: Some(Id::new("réglages").with("maj installer")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(settings, "maj_reglages_sombre", "maj_reglages_claire"));
+    let available = Shot {
+        setup: |s| s.update = Status::Available(release()),
+        hover: Some(Id::new("mise à jour")),
+        tooltip: Some(Id::new("mise à jour")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(available, "maj_barre_sombre", "maj_barre_claire"));
+    let downloading = Shot { setup: |s| s.update = Status::Downloading(release(), 0.42), ..Default::default() };
+    shoot(&gpu, &model, &both(downloading, "maj_telechargement_sombre", "maj_telechargement_claire"));
+    let current = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 4;
+            s.app_version = "0.2.1";
+            s.update = Status::Current;
+        },
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(current, "maj_a_jour_sombre", "maj_a_jour_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
 /// Points de mesure sur l'arête supérieure avant de la platine (pièce 0) et vers le moyeu.
 fn measures(s: &mut AppState) {
     use obview::tools::MeasurePoint;

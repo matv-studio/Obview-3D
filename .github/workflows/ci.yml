@@ -107,6 +107,15 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile vulkansdk.exe
           Start-Process -FilePath .\vulkansdk.exe -ArgumentList "--root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install copy_only=1" -Wait -NoNewWindow
           Get-ChildItem C:\VulkanSDK\Bin\glslangValidator.exe
+      - uses: actions/cache@v4
+        id: inno
+        with:
+          path: C:\InnoSetup
+          key: innosetup-6.7.4
+      - name: Inno Setup
+        if: steps.inno.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: tools/inno.ps1 6.7.4 C:\InnoSetup
       - uses: actions/cache/restore@v4
         id: occt
         with:
@@ -157,11 +166,21 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Construction
         run: cargo build --workspace --release
-      - name: Exécutable
+      - name: Installateur
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory licences | Out-Null
+          Copy-Item crates/obv-ui/assets/fonts/OFL-geist.txt licences/Geist-OFL.txt
+          Copy-Item C:\occt\licence\* licences/
+          Copy-Item C:\draco\LICENSE-draco licences/Draco-Apache-2.0.txt
+          $v = (cargo pkgid -p obview) -replace '.*[#@]', ''
+          & C:\InnoSetup\ISCC.exe /Q "/DAppVersion=$v" "/DSourceExe=$PWD\target\release\obview.exe" "/DLicDir=$PWD\licences" "/DOutputDir=$PWD\dist" packaging\windows\obview.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Installateur (artefact)
         uses: actions/upload-artifact@v4
         with:
           name: obview-windows
-          path: target/release/obview.exe
+          path: dist/*.exe
 
   macos:
     name: macOS (Apple Silicon, KosmicKrisp)
@@ -252,9 +271,90 @@ jobs:
           name: rendus-macos
           path: target/tmp/rendus
           if-no-files-found: ignore
-      - name: Archive
-        run: ditto -c -k --keepParent "dist/Obview 3D.app" obview-macos.zip
+      - name: Image disque
+        run: tools/macos-dmg.sh "dist/Obview 3D.app" obview-macos.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: obview-macos
-          path: obview-macos.zip
+          path: obview-macos.dmg
+
+  linux-paquets:
+    name: Linux (paquets, Ubuntu 22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    env:
+      VULKAN_SDK_VERSION: 1.4.363.0
+      OBV_REQUIRE_OCCT: "1"
+      OBV_REQUIRE_DRACO: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Outils
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build dpkg-dev
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: ~/VulkanSDK
+          key: vulkan-sdk-linux-${{ env.VULKAN_SDK_VERSION }}
+      - name: SDK Vulkan (glslangValidator)
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: tools/linux-sdk.sh "$VULKAN_SDK_VERSION" ~/VulkanSDK
+      - name: Variables
+        run: |
+          echo "VULKAN_SDK=$HOME/VulkanSDK/$VULKAN_SDK_VERSION/x86_64" >> "$GITHUB_ENV"
+          echo "OCCT_DIR=$HOME/occt" >> "$GITHUB_ENV"
+          echo "DRACO_DIR=$HOME/draco" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        id: occt
+        with:
+          path: ~/occt
+          key: occt-linux2204-${{ hashFiles('tools/occt.sh') }}
+      - name: OpenCASCADE (statique, D-27)
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: |
+          tools/occt.sh ~/occt
+          rm -rf ~/occt-work
+      - uses: actions/cache/save@v4
+        if: steps.occt.outputs.cache-hit != 'true'
+        with:
+          path: ~/occt
+          key: occt-linux2204-${{ hashFiles('tools/occt.sh') }}
+      - uses: actions/cache/restore@v4
+        id: draco
+        with:
+          path: ~/draco
+          key: draco-linux2204-${{ hashFiles('tools/draco.sh') }}
+      - name: Draco (statique, D-30)
+        if: steps.draco.outputs.cache-hit != 'true'
+        run: |
+          tools/draco.sh ~/draco
+          rm -rf ~/draco-work
+      - uses: actions/cache/save@v4
+        if: steps.draco.outputs.cache-hit != 'true'
+        with:
+          path: ~/draco
+          key: draco-linux2204-${{ hashFiles('tools/draco.sh') }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux2204-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/occt.sh', 'tools/draco.sh') }}
+      - name: Construction
+        run: cargo build --release -p obview
+      - name: Paquets
+        run: |
+          mkdir -p licences
+          cp crates/obv-ui/assets/fonts/OFL-geist.txt licences/Geist-OFL.txt
+          cp ~/occt/licence/* licences/
+          cp ~/draco/LICENSE-draco licences/Draco-Apache-2.0.txt
+          tools/linux-package.sh target/release/obview "$(cargo pkgid -p obview | sed 's/.*[#@]//')" licences dist
+          dpkg-deb -I dist/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obview-linux
+          path: |
+            dist/*.deb
+            dist/*.AppImage

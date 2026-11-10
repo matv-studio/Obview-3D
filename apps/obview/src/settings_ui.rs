@@ -21,16 +21,19 @@ pub enum Section {
     Navigation,
     Display,
     Toolbar,
+    Updates,
 }
 
 impl Section {
-    const ALL: [Section; 4] = [Section::Appearance, Section::Navigation, Section::Display, Section::Toolbar];
+    const ALL: [Section; 5] =
+        [Section::Appearance, Section::Navigation, Section::Display, Section::Toolbar, Section::Updates];
     fn label(self) -> &'static str {
         tr(match self {
             Section::Appearance => "Apparence",
             Section::Navigation => "Navigation",
             Section::Display => "Affichage",
             Section::Toolbar => "Barre d'outils",
+            Section::Updates => "Mises à jour",
         })
     }
     fn icon(self) -> &'static str {
@@ -39,6 +42,7 @@ impl Section {
             Section::Navigation => "mouse",
             Section::Display => "display",
             Section::Toolbar => "toolbar",
+            Section::Updates => "update",
         }
     }
 }
@@ -330,6 +334,108 @@ fn display(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     ]
 }
 
+/// Mises à jour (D-32) : version installée, recherche au démarrage, état et commandes de la dernière version.
+fn updates(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
+    use crate::update::{Action, Status};
+    let c = ui.theme.color.clone();
+    let muted = |t: String| Node::text(t, TextStyle::new(12.5, Weight::Regular), c.text_secondary);
+    let (auto, changed) = controls::toggle(ui, id("maj auto"), s.settings.check_updates);
+    if let Some(v) = changed {
+        s.settings.check_updates = v;
+        s.settings_dirty = true;
+    }
+    let mut request = |ui: &mut Ui, name: &str, action: Action| {
+        if ui.clicked(id(name)) {
+            s.update_request = Some(action);
+            ui.keep_animating();
+        }
+    };
+    request(ui, "maj vérifier", Action::Check);
+    request(ui, "maj installer", Action::Install);
+    request(ui, "maj notes", Action::OpenPage);
+    let check = |ui: &mut Ui, label: &str| {
+        widgets::button(
+            ui,
+            id("maj vérifier"),
+            label,
+            Some("reset"),
+            ButtonKind::Secondary,
+            tr("Rechercher une version"),
+        )
+    };
+    let mut state = Node::row().gap(10.0);
+    match &s.update {
+        Status::Idle => state.push(check(ui, tr("Vérifier"))),
+        Status::Current => {
+            state.push(Node::icon("check", 14.0, c.success));
+            state.push(muted(tr("À jour").into()));
+            state.push(check(ui, tr("Vérifier")));
+        }
+        Status::Checking { .. } => {
+            state.push(crate::shell::spinner(ui, 14.0, c.text_secondary));
+            state.push(muted(tr("Vérification").into()));
+        }
+        Status::Available(r) => {
+            state.push(muted(r.version.to_string()));
+            state.push(widgets::button(
+                ui,
+                id("maj notes"),
+                tr("Notes"),
+                None,
+                ButtonKind::Secondary,
+                tr("Notes de version"),
+            ));
+            state.push(widgets::button(
+                ui,
+                id("maj installer"),
+                tr("Mettre à jour"),
+                Some("update"),
+                ButtonKind::Primary,
+                &format!("Obview 3D {}", r.version),
+            ));
+        }
+        Status::Downloading(r, f) => {
+            state.push(crate::shell::progress_ring(ui, 14.0, *f, c.text_secondary));
+            state.push(muted(format!(
+                "{} · {}",
+                r.version,
+                obv_ui::i18n::with_unit(&format!("{}", (f * 100.0).floor() as u32), "%")
+            )));
+        }
+        Status::Installing(r) => {
+            state.push(crate::shell::spinner(ui, 14.0, c.text_secondary));
+            state.push(muted(r.version.to_string()));
+        }
+        Status::Failed { release, error } => {
+            state.push(Node::icon("alert", 14.0, c.danger).tooltip(error.as_str()));
+            state.push(Node::text(tr("Échec"), TextStyle::new(12.5, Weight::Medium), c.danger).tooltip(error.as_str()));
+            if release.is_some() {
+                state.push(widgets::button(
+                    ui,
+                    id("maj installer"),
+                    tr("Réessayer"),
+                    Some("reset"),
+                    ButtonKind::Secondary,
+                    error,
+                ));
+            } else {
+                state.push(check(ui, tr("Réessayer")));
+            }
+        }
+    }
+    vec![
+        section_title(ui, "Obview 3D"),
+        card(
+            ui,
+            vec![
+                setting_row(ui, tr("Version"), muted(s.app_version.to_string())),
+                setting_row(ui, tr("Dernière version"), state),
+                setting_row(ui, tr("Rechercher au démarrage"), auto),
+            ],
+        ),
+    ]
+}
+
 /// Boutons de la barre du bas : un interrupteur par bouton, dans l'ordre de la barre (D-25).
 fn toolbar(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     let c = ui.theme.color.clone();
@@ -406,6 +512,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         Section::Navigation => navigation(ui, s),
         Section::Display => display(ui, s),
         Section::Toolbar => toolbar(ui, s),
+        Section::Updates => updates(ui, s),
     };
     let content = Node::scroll(id("défilement"))
         .width(Size::Fill(1.0))
