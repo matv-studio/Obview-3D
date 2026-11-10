@@ -481,3 +481,17 @@ haut, Ouvrir un fichier » ; « on fait le nouveau build sous le n° 0.3.0 ».
   toujours la boîte de dialogue directement).
 - Export en quads : abandonné à la demande de l'utilisateur.
 - Version 0.3.0 (nouvel en-tête des notes de version ; le brouillon v0.2.1 est dépassé).
+
+## D-34 · Logo « lentille » (10/11/2026)
+
+Demande : « fais-moi des propositions qui évoluent sur le logo actuel, puis on l'utilisera pour le build 0.3.0 » ;
+six variantes présentées (volume, lentille, orbite, coupe, maillage, lumière) ; choix : « B lentille pour
+l'instant ».
+
+- Cube isométrique au trait de l'ancien logo, réduit, dans un anneau (le O d'Obview, un objectif), face du dessus
+  teintée, tuile #1c1c1c.
+- `tools/icones.py` (rsvg-convert, Pillow) écrit `obview.svg`, `obview-256.png`, `obview.ico` (16 à 256 px ; trait
+  d'au moins 1,5 pixel réel, anneau et cube agrandis à 16 et 24 px) et `obview.icns` (tuile de 824 dans 1024,
+  gabarit Apple).
+- Barre du haut : icône `obview` (même dessin, grille 16) à la place de l'icône de pièce.
+- « Pour l'instant » : le logo pourra encore changer ; refaire les fichiers par `tools/icones.py`.

@@ -359,8 +359,8 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let m = ui.theme.size.clone();
     let theme_id = Id::new("thème");
     let logo = Node::stack().size(Size::Px(24.0), Size::Px(24.0)).radius(6.0).bg(c.accent).child(Node::icon(
-        "part",
-        15.0,
+        "obview",
+        21.0,
         c.accent_text,
     ));
     let file = Node::row()

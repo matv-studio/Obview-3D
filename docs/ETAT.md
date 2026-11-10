@@ -68,12 +68,12 @@ Mis à jour : 10/11/2026.
   environnement flouté, teinte ; Shift + glisser droit : dôme ; onglet Éclairage) ; bouton Vues (caméra) dans
   l'angle haut droit de la vue ; fichiers récents sous le nom du fichier ; bouton Panneaux (Ctrl + \) et
   compteur triangles / sommets. Version 0.3.0.
+- D-34 : logo « lentille » (cube au trait dans un anneau), icônes refaites par `tools/icones.py`.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
 0. Brouillon de version v0.3.0 (installateurs Windows, macOS, Linux) préparé par `version.yml` : à essayer et
-   publier par l'utilisateur ; les brouillons v0.1.0, v0.2.0 et v0.2.1 sont dépassés. Nouveau logo pour 0.3.0
-   (propositions en cours). Archives 0.2.0 : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
+   publier par l'utilisateur ; les brouillons v0.1.0, v0.2.0 et v0.2.1 sont dépassés. Archives 0.2.0 : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
    en CI (`macos-26`), le chargeur livré trouve le pilote KosmicKrisp, qui ne voit aucun GPU utilisable dans
    la machine virtuelle (pas de Metal 4) ; premier essai à faire par l'utilisateur. Bascule de moteur à chaud vérifiée seulement dans les
    essais. Ensuite : réglage de la finesse du maillage STEP ; arbre d'assemblage (chemins lus, pas encore

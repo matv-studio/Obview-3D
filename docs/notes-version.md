@@ -31,6 +31,7 @@ Réglages › Mises à jour).
 - Fichiers récents : clic sur le nom du fichier dans la barre du haut.
 - Bouton de la barre du bas (Ctrl + \) pour masquer ou montrer les deux panneaux ; compteur triangles et
   sommets dans la vue quand le panneau de gauche est masqué.
+- Nouveau logo.
 - Installateurs Windows, macOS et Linux ; mises à jour détectées et installées depuis l'application (empreinte
   SHA-256 vérifiée), recherche au démarrage au plus une fois par jour, désactivable.
 - Thème sombre par défaut, barre de titre de la fenêtre comprise.

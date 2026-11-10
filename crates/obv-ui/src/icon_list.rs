@@ -24,6 +24,7 @@ pub(crate) static ICONS: &[(&str, &str)] = &[
     ("measure", include_str!("../assets/icons/measure.svg")),
     ("moon", include_str!("../assets/icons/moon.svg")),
     ("mouse", include_str!("../assets/icons/mouse.svg")),
+    ("obview", include_str!("../assets/icons/obview.svg")),
     ("open", include_str!("../assets/icons/open.svg")),
     ("panels", include_str!("../assets/icons/panels.svg")),
     ("part", include_str!("../assets/icons/part.svg")),
