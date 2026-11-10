@@ -233,12 +233,25 @@ jobs:
         run: cargo build --release -p obview
       - name: Application
         run: tools/macos-app.sh target/release/obview "$(cargo pkgid -p obview | sed 's/.*[#@]//')" "$VULKAN_SDK" dist
-      # Information seulement : les machines virtuelles de GitHub n'offrent pas forcément Metal 4.
+      # Information seulement : les machines virtuelles de GitHub n'offrent pas forcément Metal 4. Chargeur et
+      # pilote de l'application ; « env » pose DYLD_LIBRARY_PATH après le lancement des outils protégés par SIP.
       - name: Pilote KosmicKrisp sur la machine de construction
         continue-on-error: true
         run: |
-          VK_DRIVER_FILES="dist/Obview 3D.app/Contents/Resources/vulkan/icd.d/libkosmickrisp_icd.json" \
+          app="$PWD/dist/Obview 3D.app"
+          env DYLD_LIBRARY_PATH="$app/Contents/Frameworks" \
+            VK_DRIVER_FILES="$app/Contents/Resources/vulkan/icd.d/libkosmickrisp_icd.json" \
             "$VULKAN_SDK/bin/vulkaninfo" --summary
+          env DYLD_LIBRARY_PATH="$app/Contents/Frameworks" \
+            VK_DRIVER_FILES="$app/Contents/Resources/vulkan/icd.d/libkosmickrisp_icd.json" \
+            cargo test --release -p obv-gpu -p obview
+      - name: Rendus des essais macOS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendus-macos
+          path: target/tmp/rendus
+          if-no-files-found: ignore
       - name: Archive
         run: ditto -c -k --keepParent "dist/Obview 3D.app" obview-macos.zip
       - uses: actions/upload-artifact@v4
