@@ -62,8 +62,9 @@ Mis à jour : 10/11/2026.
 
 ## Prochaines étapes
 0. Brouillon de version v0.2.0 (Windows x64, macOS arm64) préparé par `version.yml` : à essayer et publier par
-   l'utilisateur ; le brouillon v0.1.0 est dépassé. Application macOS jamais lancée sur un Mac réel (CI sans
-   Metal 4) : premier essai à faire par l'utilisateur. Bascule de moteur à chaud vérifiée seulement dans les
+   l'utilisateur ; le brouillon v0.1.0 est dépassé. Archives : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
+   en CI (`macos-26`), le chargeur livré trouve le pilote KosmicKrisp, qui ne voit aucun GPU utilisable dans
+   la machine virtuelle (pas de Metal 4) ; premier essai à faire par l'utilisateur. Bascule de moteur à chaud vérifiée seulement dans les
    essais. Ensuite : réglage de la finesse du maillage STEP ; arbre d'assemblage (chemins lus, pas encore
    affichés) ; défilement de l'arbre jusqu'à la pièce double-cliquée ; Linux à discuter.
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
