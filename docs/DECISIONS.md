@@ -332,7 +332,9 @@ Demandes de l'utilisateur du 10/11/2026.
   fichier (`ReadFile`) sans mesure possible : barre indéterminée. Parts des étapes relevées sur la montre
   (11,6 s en version optimisée : analyse 11 %, import 65 %, maillage 23 %). Le modèle est installé à l'image
   suivant l'affichage de « Préparation » (envoi au GPU sur le fil de la fenêtre). Échec : avis en haut de la
-  vue (titre, fichier, détail), au lieu de la seule console.
+  vue (titre, fichier, détail), au lieu de la seule console. Une seule lecture OpenCASCADE à la fois (verrou dans `obv-cad` : son
+  application XCAF et son messager ne sont pas sûrs entre fils ; deux lectures parallèles plantaient les
+  essais de la CI) ; une lecture annulée libère le verrou au plus tôt.
 - Export GLB : Blender refuse `EXT_meshopt_compression` (absent de la liste des extensions de son importeur).
   Compression au choix dans la fenêtre Convertir : Aucune (flottants), Quantifiée (`KHR_mesh_quantization`,
   par défaut, lue par Blender, Unity, Unreal, three.js, Babylon.js), Meshopt (le plus léger, pour le web).

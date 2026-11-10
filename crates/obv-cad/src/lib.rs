@@ -11,6 +11,11 @@ use obv_io::{Model, Progress};
 #[cfg(occt)]
 mod ffi;
 
+/// OpenCASCADE n'est pas sûr entre fils pour ce qui est partagé (application XCAF, messager, sessions
+/// d'échange) : une seule lecture à la fois. Une lecture annulée rend la main au plus tôt (D-29).
+#[cfg(occt)]
+static OCCT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Extensions lues par ce module.
 pub const EXTENSIONS: &[&str] = &["step", "stp", "iges", "igs"];
 
@@ -73,12 +78,17 @@ fn read_native(_: &Path, _: bool, _: Options, _: &Progress) -> Result<Model, Cad
 fn read_native(path: &Path, iges: bool, options: Options, progress: &Progress) -> Result<Model, CadError> {
     use obv_io::{Material, Mesh, Part, Stage, SubMesh};
     let p = path.to_str().ok_or_else(|| CadError::Read("chemin non représentable en UTF-8".into()))?;
+    let guard = OCCT.lock().unwrap_or_else(|e| e.into_inner());
+    if progress.cancelled() {
+        return Err(CadError::Cancelled);
+    }
     let r = ffi::bridge::read_cad(
         p,
         iges,
         &ffi::bridge::CadOptions { linear: options.linear, angular: options.angular },
         &ffi::CadProgress(progress),
     );
+    drop(guard);
     if progress.cancelled() {
         return Err(CadError::Cancelled);
     }
@@ -130,12 +140,18 @@ fn read_native(path: &Path, iges: bool, options: Options, progress: &Progress) -
 mod tests {
     use super::*;
 
+    /// Jeu d'essai écrit sous le verrou d'OpenCASCADE (essais en parallèle).
+    fn write_test(path: &Path) -> bool {
+        let _g = OCCT.lock().unwrap_or_else(|e| e.into_inner());
+        ffi::bridge::write_test_step(path.to_str().unwrap())
+    }
+
     #[test]
     fn assemblage_noms_couleurs() {
         let dir = std::env::temp_dir().join("obv-cad-essai");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("deux_cubes.step");
-        assert!(ffi::bridge::write_test_step(path.to_str().unwrap()), "écriture du jeu d'essai");
+        assert!(write_test(&path), "écriture du jeu d'essai");
         let progress = Progress::default();
         let m = read_with(&path, Options::default(), &progress).unwrap();
         assert_eq!(progress.get().0, obv_io::Stage::Prepare);
@@ -159,7 +175,7 @@ mod tests {
         let dir = std::env::temp_dir().join("obv-cad-essai-annule");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("deux_cubes.step");
-        assert!(ffi::bridge::write_test_step(path.to_str().unwrap()));
+        assert!(write_test(&path));
         let progress = Progress::default();
         progress.cancel();
         assert!(matches!(read_with(&path, Options::default(), &progress), Err(CadError::Cancelled)));
