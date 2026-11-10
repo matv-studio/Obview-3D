@@ -6,6 +6,8 @@ pub mod demo;
 pub mod frame;
 pub mod gizmo;
 pub mod inspector;
+pub mod lang;
+pub mod loading;
 pub mod navigation;
 pub mod settings;
 pub mod settings_ui;

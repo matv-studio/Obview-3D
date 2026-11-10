@@ -189,7 +189,7 @@ pub fn tree_row(ui: &mut Ui, r: TreeRow<'_>) -> Node {
         row = row.child(
             Node::stack()
                 .id(eye_id)
-                .tooltip(if r.visible { "Masquer" } else { "Afficher" })
+                .tooltip(crate::tr(if r.visible { "Masquer" } else { "Afficher" }))
                 .size(Size::Px(24.0), Size::Px(24.0))
                 .radius(m.radius_control)
                 .child(Node::icon(if r.visible { "eye" } else { "eye-off" }, m.icon, ec)),

@@ -27,6 +27,9 @@ struct Shot<'a> {
     setup: fn(&mut AppState),
     /// Éléments cliqués, dans l'ordre, avant la capture.
     clicks: &'a [Id],
+    /// Instant de la capture après le dernier clic (s) : par défaut, transitions terminées ; plus court, image
+    /// prise en pleine transition.
+    settle: f64,
 }
 
 impl Default for Shot<'_> {
@@ -42,6 +45,7 @@ impl Default for Shot<'_> {
             scale: 1.0,
             setup: |_| {},
             clicks: &[],
+            settle: 2.5,
         }
     }
 }
@@ -122,15 +126,20 @@ fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8
         frame(&mut ui, &mut state, t + 0.1, p, false);
         t += 0.2;
     }
-    frame(&mut ui, &mut state, t, None, false);
-    let (fx, fy) = shot.hover_at;
-    let pointer =
-        shot.hover.and_then(|id| ui.rect_of(id)).map(|r| vec2(r.min.x + r.width() * fx, r.min.y + r.height() * fy));
-    frame(&mut ui, &mut state, t + 0.5, pointer, false);
-    ui.force_tooltip = shot.tooltip;
-    // Animations terminées (apparition des fenêtres, interrupteurs).
-    frame(&mut ui, &mut state, t + 1.5, pointer, false);
-    frame(&mut ui, &mut state, t + 2.5, pointer, false);
+    if shot.settle < 0.5 {
+        // Image en pleine transition : aucune image intermédiaire.
+        frame(&mut ui, &mut state, t - 0.1 + shot.settle, None, false);
+    } else {
+        frame(&mut ui, &mut state, t, None, false);
+        let (fx, fy) = shot.hover_at;
+        let pointer =
+            shot.hover.and_then(|id| ui.rect_of(id)).map(|r| vec2(r.min.x + r.width() * fx, r.min.y + r.height() * fy));
+        frame(&mut ui, &mut state, t + 0.5, pointer, false);
+        ui.force_tooltip = shot.tooltip;
+        // Animations terminées (apparition des fenêtres, interrupteurs).
+        frame(&mut ui, &mut state, t + 1.5, pointer, false);
+        frame(&mut ui, &mut state, t + 2.5, pointer, false);
+    }
     let mut f = OffscreenFrame::new(gpu, w, h).unwrap();
     let a = shell::selection_color(&ui.theme);
     let to8 =
@@ -401,6 +410,87 @@ fn conversion_deux_themes() {
         ..Default::default()
     };
     shoot(&gpu, &model, &both(done, "conversion_bilan_sombre", "conversion_bilan_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Ouverture (D-29) : vue vide (zone survolée), lecture en cours, avis d'échec.
+#[test]
+fn ouverture_deux_themes() {
+    use obview::loading::{Loading, Notice};
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let empty = Model::default();
+    let vide = Shot { hover: Some(obview::loading::empty_id()), ..Default::default() };
+    for shot in both(vide, "vide_sombre", "vide_clair") {
+        let img = capture(&gpu, &empty, "", &shot);
+        check_reference(shot.name, shot.size.0, shot.size.1, &img);
+    }
+    let lecture = Shot {
+        setup: |s| {
+            s.loading = Some(Loading {
+                name: "WSSA0089.stp".into(),
+                stage: obv_io::Stage::Transfer,
+                fraction: Some(0.42),
+                elapsed: 7.4,
+                serial: 0,
+            })
+        },
+        ..Default::default()
+    };
+    for shot in both(lecture, "lecture_sombre", "lecture_claire") {
+        let img = capture(&gpu, &empty, "", &shot);
+        check_reference(shot.name, shot.size.0, shot.size.1, &img);
+    }
+    let avis = Shot {
+        setup: |s| {
+            s.notice = Some(Notice {
+                title: "Impossible d'ouvrir",
+                subject: "piece.stl".into(),
+                detail: "fichier invalide : STL trop court".into(),
+            })
+        },
+        ..Default::default()
+    };
+    shoot(&gpu, &demo::bracket(), &both(avis, "avis_sombre", "avis_clair"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Interface en français (réglage Langue) : panneaux et réglages d'apparence.
+#[test]
+fn francais() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let panels = Shot {
+        name: "francais_panneaux",
+        select: Some(1),
+        setup: |s| {
+            s.settings.language = obview::settings::Language::French;
+            s.left_open = true;
+            s.right_open = true;
+        },
+        ..Default::default()
+    };
+    let settings = Shot {
+        name: "francais_reglages",
+        setup: |s| {
+            s.settings.language = obview::settings::Language::French;
+            s.settings_open = true;
+        },
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &[panels, settings]);
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Transitions prises en cours (D-29) : bandes des vues de rendu qui entrent, panneau qui glisse.
+#[test]
+fn transitions() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    static RENDER: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("rendu")]);
+    static GRIP: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [shell::grip_id(1)]);
+    let bands = Shot { name: "transition_rendu", clicks: &*RENDER, settle: 0.17, ..Default::default() };
+    let panel = Shot { name: "transition_panneau", select: Some(1), clicks: &*GRIP, settle: 0.1, ..Default::default() };
+    shoot(&gpu, &model, &[bands, panel]);
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 

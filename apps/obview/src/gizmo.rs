@@ -7,7 +7,7 @@
 //!
 //! Partout : un clic aligne la vue sur la direction visée, glisser fait tourner la vue.
 
-use obv_ui::{Color, Painter, Rect, TextStyle, Theme, ThemeKind, Vec2, Weight, vec2};
+use obv_ui::{Color, Painter, Rect, TextStyle, Theme, ThemeKind, Vec2, Weight, tr, vec2};
 
 use crate::settings::GizmoStyle;
 
@@ -102,19 +102,19 @@ fn axis_color(theme: &Theme, a: [f32; 3]) -> Color {
 pub fn name(dir: [f32; 3]) -> String {
     let mut parts = Vec::new();
     if dir[1] > 0.0 {
-        parts.push("Dessus");
+        parts.push(tr("Dessus"));
     } else if dir[1] < 0.0 {
-        parts.push("Dessous");
+        parts.push(tr("Dessous"));
     }
     if dir[2] > 0.0 {
-        parts.push("Avant");
+        parts.push(tr("Avant"));
     } else if dir[2] < 0.0 {
-        parts.push("Arrière");
+        parts.push(tr("Arrière"));
     }
     if dir[0] > 0.0 {
-        parts.push("Droite");
+        parts.push(tr("Droite"));
     } else if dir[0] < 0.0 {
-        parts.push("Gauche");
+        parts.push(tr("Gauche"));
     }
     let s = parts.join(" ").to_lowercase();
     let mut c = s.chars();
@@ -386,6 +386,7 @@ fn paint_cube(p: &mut Painter<'_>, v: &View, hover: Option<[f32; 3]>, theme: &Th
             let uv = v.project(add(n, up, 1.0)) - center;
             let k = v.k;
             let mut size = 11.0;
+            let label = tr(label);
             let l = p.res.fonts.layout(label, TextStyle::new(size, Weight::SemiBold), p.dl.scale);
             let fit = 1.62 * k;
             if l.width > fit {
@@ -437,8 +438,12 @@ mod tests {
         let (yaw, pitch) = angles([1.0, 1.0, 1.0], 0.0);
         assert!((yaw - std::f64::consts::FRAC_PI_4).abs() < 1e-6);
         assert!((pitch - (1.0f64 / 3f64.sqrt()).asin()).abs() < 1e-6);
+        obv_ui::i18n::set_lang(obv_ui::Lang::Fr);
         assert_eq!(name([0.0, 1.0, 0.0]), "Dessus");
         assert_eq!(name([1.0, 0.0, 1.0]), "Avant droite");
         assert_eq!(name([-1.0, 1.0, -1.0]), "Dessus arrière gauche");
+        obv_ui::i18n::set_lang(obv_ui::Lang::En);
+        crate::lang::init();
+        assert_eq!(name([-1.0, 1.0, -1.0]), "Top back left");
     }
 }

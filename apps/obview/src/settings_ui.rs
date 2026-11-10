@@ -3,12 +3,14 @@
 use obv_ui::{
     ACCENT_PRESETS, Align, Color, Edges, Id, Justify, Layer, Node, Size, TextStyle, Tooltip, Ui, Weight,
     controls::{self, TextInput},
+    tr,
     widgets::{self, ButtonKind},
 };
 
 use crate::{
     settings::{
-        GizmoStyle, NavAction, NavScheme, Scope, Settings, ThemeChoice, ToolButton, Units, gesture_keys, gestures,
+        GizmoStyle, Language, NavAction, NavScheme, Scope, Settings, ThemeChoice, ToolButton, Units, gesture_keys,
+        gestures,
     },
     shell::AppState,
 };
@@ -24,12 +26,12 @@ pub enum Section {
 impl Section {
     const ALL: [Section; 4] = [Section::Appearance, Section::Navigation, Section::Display, Section::Toolbar];
     fn label(self) -> &'static str {
-        match self {
+        tr(match self {
             Section::Appearance => "Apparence",
             Section::Navigation => "Navigation",
             Section::Display => "Affichage",
             Section::Toolbar => "Barre d'outils",
-        }
+        })
     }
     fn icon(self) -> &'static str {
         match self {
@@ -113,7 +115,7 @@ fn gesture_cell(ui: &Ui, scheme: NavScheme, action: NavAction) -> Node {
     let list: Vec<_> = gestures(scheme).iter().filter(|(a, _)| *a == action).collect();
     for (k, (_, gs)) in list.iter().enumerate() {
         if k > 0 {
-            row.push(Node::text("ou", TextStyle::new(11.5, Weight::Regular), c.text_tertiary));
+            row.push(Node::text(tr("ou"), TextStyle::new(11.5, Weight::Regular), c.text_tertiary));
         }
         for (j, key) in gesture_keys(gs).into_iter().enumerate() {
             if j > 0 {
@@ -124,27 +126,39 @@ fn gesture_cell(ui: &Ui, scheme: NavScheme, action: NavAction) -> Node {
     }
     if action == NavAction::Zoom {
         if !list.is_empty() {
-            row.push(Node::text("ou", TextStyle::new(11.5, Weight::Regular), c.text_tertiary));
+            row.push(Node::text(tr("ou"), TextStyle::new(11.5, Weight::Regular), c.text_tertiary));
         }
-        row.push(key_chip(ui, "Molette"));
+        row.push(key_chip(ui, tr("Molette")));
     }
     row
 }
 
 fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
+    let langs: Vec<&str> = Language::ALL.iter().map(|l| l.label()).collect();
+    let cur = Language::ALL.iter().position(|l| *l == s.settings.language).unwrap_or(0);
+    let (lang_seg, picked) = segmented(ui, id("langue"), &langs, cur, 200.0);
+    if let Some(i) = picked {
+        s.settings.language = Language::ALL[i];
+        s.settings_dirty = true;
+    }
+    let (anim_toggle, ch) = controls::toggle(ui, id("animations"), s.settings.animations);
+    if let Some(v) = ch {
+        s.settings.animations = v;
+        s.settings_dirty = true;
+    }
     let st = &mut s.settings;
     let theme_idx = match st.theme {
         ThemeChoice::Dark => 0,
         ThemeChoice::Light => 1,
         ThemeChoice::System => 2,
     };
-    let (seg, picked) = segmented(ui, id("thème"), &["Sombre", "Clair", "Système"], theme_idx, 228.0);
+    let (seg, picked) = segmented(ui, id("thème"), &[tr("Sombre"), tr("Clair"), tr("Système")], theme_idx, 228.0);
     if let Some(i) = picked {
         st.theme = [ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::System][i];
         s.settings_dirty = true;
     }
     let mut swatches = Node::row().gap(2.0);
-    let (none, clicked) = controls::swatch_none(ui, id("accent aucune"), s.settings.accent.is_none(), "Aucune");
+    let (none, clicked) = controls::swatch_none(ui, id("accent aucune"), s.settings.accent.is_none(), tr("Aucune"));
     if clicked {
         s.settings.accent = None;
         s.accent_hex.clear();
@@ -153,7 +167,7 @@ fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     swatches.push(none);
     for (i, (hex, name)) in ACCENT_PRESETS.iter().enumerate() {
         let (n, clicked) =
-            controls::swatch(ui, id("accent").with(i), Color::hex(*hex), s.settings.accent == Some(*hex), name);
+            controls::swatch(ui, id("accent").with(i), Color::hex(*hex), s.settings.accent == Some(*hex), tr(name));
         if clicked {
             s.settings.accent = Some(*hex);
             s.accent_hex = format!("{hex:06X}");
@@ -193,7 +207,8 @@ fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         Scope::Standard => 1,
         Scope::Extended => 2,
     };
-    let (scope, picked) = segmented(ui, id("étendue"), &["Minimale", "Standard", "Étendue"], scope_idx, 252.0);
+    let (scope, picked) =
+        segmented(ui, id("étendue"), &[tr("Minimale"), tr("Standard"), tr("Étendue")], scope_idx, 252.0);
     if let Some(i) = picked
         && s.settings.accent.is_some()
     {
@@ -201,19 +216,21 @@ fn appearance(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         s.settings_dirty = true;
     }
     let scope = if s.settings.accent.is_some() {
-        scope.id(id("étendue info")).tooltip("Minimale : focus et contour de la vue. Standard : + action principale, interrupteurs, sélection. Étendue : + onglets, choix, lignes actives")
+        scope.id(id("étendue info")).tooltip(tr("Minimale : focus et contour de la vue. Standard : + action principale, interrupteurs, sélection. Étendue : + onglets, choix, lignes actives"))
     } else {
-        scope.opacity(0.45).id(id("étendue info")).tooltip("Choisir d'abord une couleur d'accent")
+        scope.opacity(0.45).id(id("étendue info")).tooltip(tr("Choisir d'abord une couleur d'accent"))
     };
     vec![
-        section_title(ui, "Interface"),
+        section_title(ui, tr("Interface")),
         card(
             ui,
             vec![
-                setting_row(ui, "Thème", seg),
-                setting_row(ui, "Couleur d'accent", swatches),
-                setting_row(ui, "Couleur personnalisée", Node::row().gap(8.0).child(dot).child(input)),
-                setting_row(ui, "Étendue de l'accent", scope),
+                setting_row(ui, tr("Langue"), lang_seg),
+                setting_row(ui, tr("Thème"), seg),
+                setting_row(ui, tr("Couleur d'accent"), swatches),
+                setting_row(ui, tr("Couleur personnalisée"), Node::row().gap(8.0).child(dot).child(input)),
+                setting_row(ui, tr("Étendue de l'accent"), scope),
+                setting_row(ui, tr("Animations"), anim_toggle),
             ],
         ),
     ]
@@ -228,7 +245,7 @@ fn navigation(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         s.settings_dirty = true;
     }
     let scheme = s.settings.navigation;
-    let mut map_rows = vec![setting_row(ui, "Schéma", sel)];
+    let mut map_rows = vec![setting_row(ui, tr("Schéma"), sel)];
     for a in NavAction::ALL {
         map_rows.push(setting_row(ui, a.label(), gesture_cell(ui, scheme, a)));
     }
@@ -242,9 +259,9 @@ fn navigation(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         toggles.push(setting_row(ui, label, n));
     };
     let mut dirty = false;
-    tog(ui, "inverser", "Inverser le zoom", &mut s.settings.invert_zoom, &mut dirty);
-    tog(ui, "vers pointeur", "Zoomer vers le pointeur", &mut s.settings.zoom_to_cursor, &mut dirty);
-    tog(ui, "pivot", "Pivoter autour du point visé", &mut s.settings.orbit_around_cursor, &mut dirty);
+    tog(ui, "inverser", tr("Inverser le zoom"), &mut s.settings.invert_zoom, &mut dirty);
+    tog(ui, "vers pointeur", tr("Zoomer vers le pointeur"), &mut s.settings.zoom_to_cursor, &mut dirty);
+    tog(ui, "pivot", tr("Pivoter autour du point visé"), &mut s.settings.orbit_around_cursor, &mut dirty);
     let (sl, v) = controls::slider(ui, id("vitesse"), s.settings.zoom_speed, 0.25, 4.0, 0.05, 160.0);
     if let Some(v) = v {
         s.settings.zoom_speed = v;
@@ -252,19 +269,19 @@ fn navigation(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     }
     let speed = Node::row().gap(10.0).child(sl).child(
         Node::text(
-            format!("{:.2}×", s.settings.zoom_speed).replace('.', ","),
+            format!("{}×", obv_ui::i18n::decimal(s.settings.zoom_speed as f64, 2)),
             TextStyle::new(12.0, Weight::Medium),
             ui.theme.color.text_secondary,
         )
         .width(Size::Px(40.0)),
     );
-    toggles.push(setting_row(ui, "Vitesse du zoom", speed));
+    toggles.push(setting_row(ui, tr("Vitesse du zoom"), speed));
     s.settings_dirty |= dirty;
     vec![
-        section_title(ui, "Souris"),
+        section_title(ui, tr("Souris")),
         card(ui, map_rows),
         Node::new().height(Size::Px(14.0)),
-        section_title(ui, "Comportement"),
+        section_title(ui, tr("Comportement")),
         card(ui, toggles),
     ]
 }
@@ -288,8 +305,8 @@ fn display(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         s.settings_dirty = true;
     }
     vec![
-        section_title(ui, "Vue 3D"),
-        card(ui, vec![setting_row(ui, "Unités", sel), setting_row(ui, "Gizmo de navigation", seg)]),
+        section_title(ui, tr("Vue 3D")),
+        card(ui, vec![setting_row(ui, tr("Unités"), sel), setting_row(ui, tr("Gizmo de navigation"), seg)]),
     ]
 }
 
@@ -322,7 +339,7 @@ fn toolbar(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
                 .child(sw),
         );
     }
-    vec![section_title(ui, "Barre du bas"), card(ui, rows)]
+    vec![section_title(ui, tr("Barre du bas")), card(ui, rows)]
 }
 
 /// Ajoute la fenêtre des réglages en calque modal si elle est ouverte.
@@ -384,14 +401,14 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         s.settings_dirty = true;
     }
     let footer = vec![
-        widgets::button(ui, reset_id, "Rétablir", Some("reset"), ButtonKind::Secondary, "Valeurs par défaut"),
+        widgets::button(ui, reset_id, tr("Rétablir"), Some("reset"), ButtonKind::Secondary, tr("Valeurs par défaut")),
         Node::spacer(),
-        widgets::button(ui, id("terminé"), "Terminé", None, ButtonKind::Primary, "Fermer les réglages"),
+        widgets::button(ui, id("terminé"), tr("Terminé"), None, ButtonKind::Primary, tr("Fermer les réglages")),
     ];
     if ui.clicked(id("terminé")) {
         s.settings_open = false;
     }
-    let (node, close) = controls::modal(ui, Id::new(ROOT), "Réglages", (760.0, 620.0), body, footer);
+    let (node, close) = controls::modal(ui, Id::new(ROOT), tr("Réglages"), (760.0, 620.0), body, footer);
     if close {
         s.settings_open = false;
     }

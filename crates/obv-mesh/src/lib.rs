@@ -17,7 +17,7 @@ use std::{
 use obv_io::{Model, Part};
 pub use optimize::{MeshReport, SimplifyParams, hausdorff, optimize_mesh, optimize_mesh_with};
 use rayon::prelude::*;
-pub use write::{Format, OutputFile, WriteOptions, encode};
+pub use write::{Compression, Format, OutputFile, WriteOptions, encode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ConvertOptions {
@@ -26,8 +26,8 @@ pub struct ConvertOptions {
     pub tolerance_m: f64,
     /// Silhouette préservée : sommets des arêtes vives prioritaires.
     pub keep_silhouette: bool,
-    /// GLB : quantification et compression meshoptimizer.
-    pub compress: bool,
+    /// GLB : compression des géométries.
+    pub compression: Compression,
 }
 
 impl ConvertOptions {
@@ -109,7 +109,7 @@ pub fn convert(
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "modele".into());
     let wopts = WriteOptions {
         format: opts.format,
-        compress: opts.compress,
+        compression: opts.compression,
         tolerance: (opts.tolerance_m / model.unit_m) as f32,
     };
     let files = encode(&out, wopts, &stem);

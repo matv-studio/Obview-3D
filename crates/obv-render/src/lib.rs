@@ -363,6 +363,8 @@ struct ParamRing {
 struct BackgroundPush {
     top: [f32; 4],
     bottom: [f32; 4],
+    /// Bande gardée (comme pour la scène).
+    band: [f32; 4],
 }
 
 pub struct SceneRenderer {
@@ -591,11 +593,23 @@ impl SceneRenderer {
 
     /// Fond de la vue : dégradé vertical (couleurs linéaires `top`, `bottom`) dans `rect` (pixels de la cible).
     pub fn draw_background(&self, cmd: vk::CommandBuffer, rect: [f32; 4], top: [f32; 4], bottom: [f32; 4]) {
+        self.draw_background_band(cmd, rect, top, bottom, Band::ALL);
+    }
+
+    /// Fond limité à la bande `band` (transitions de l'inspecteur).
+    pub fn draw_background_band(
+        &self,
+        cmd: vk::CommandBuffer,
+        rect: [f32; 4],
+        top: [f32; 4],
+        bottom: [f32; 4],
+        band: Band,
+    ) {
         if self.set_rect(cmd, rect).is_none() {
             return;
         }
         self.background.bind(cmd);
-        self.background.push(cmd, &BackgroundPush { top, bottom });
+        self.background.push(cmd, &BackgroundPush { top, bottom, band: band.raw() });
         unsafe { self.gpu.device().cmd_draw(cmd, 3, 1, 0, 0) };
     }
 

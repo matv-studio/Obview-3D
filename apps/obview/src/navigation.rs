@@ -86,6 +86,9 @@ struct Drag {
     pivot: V3,
     /// Profondeur de vue du point saisi (panoramique sous le pointeur).
     depth: f64,
+    /// Point d'appui ; le geste n'agit qu'une fois armé (seuil du bouton gauche).
+    start: Vec2,
+    armed: bool,
 }
 
 struct Transition {
@@ -176,7 +179,10 @@ impl Navigator {
                         (_, Some(h)) => (cam.target, dot(sub(eye, h), back)),
                         _ => (cam.target, cam.distance),
                     };
-                    self.drag = Some(Drag { action, button: *b, last: p, pivot, depth: depth.max(1e-9) });
+                    // Bouton gauche : le clic sélectionne ; le geste ne démarre qu'au-delà de 3 px.
+                    let armed = *b != MouseButton::Left;
+                    self.drag =
+                        Some(Drag { action, button: *b, last: p, pivot, depth: depth.max(1e-9), start: p, armed });
                     break;
                 }
             }
@@ -187,7 +193,11 @@ impl Navigator {
             self.drag = None;
         }
         if let (Some(d), Some(p)) = (&mut self.drag, input.pointer) {
-            let delta = p - d.last;
+            if !d.armed {
+                let m = p - d.start;
+                d.armed = m.x * m.x + m.y * m.y > 9.0;
+            }
+            let delta = if d.armed { p - d.last } else { obv_ui::vec2(0.0, 0.0) };
             d.last = p;
             if delta.x != 0.0 || delta.y != 0.0 {
                 moved = true;
@@ -197,7 +207,9 @@ impl Navigator {
                     }
                     NavAction::Pan => {
                         let (right, up, _) = basis(cam.yaw, cam.pitch);
-                        let wpp = 2.0 * d.depth * (cam.fov_y * 0.5).tan() / ctx.view.height().max(1.0) as f64;
+                        // Orthographique : l'échelle ne dépend pas de la profondeur du point saisi.
+                        let depth = if cam.ortho { cam.distance } else { d.depth };
+                        let wpp = 2.0 * depth * (cam.fov_y * 0.5).tan() / ctx.view.height().max(1.0) as f64;
                         let m = add(mul(right, -delta.x as f64 * wpp), mul(up, delta.y as f64 * wpp));
                         cam.target = add(cam.target, m);
                     }
@@ -324,7 +336,7 @@ mod tests {
 
     #[test]
     fn geste_blender() {
-        let s = Settings::default();
+        let s = Settings { navigation: crate::settings::NavScheme::Blender, ..Default::default() };
         let view = Rect::from_xywh(0.0, 0.0, 800.0, 600.0);
         let mut nav = Navigator::default();
         let mut cam = Camera::default();
@@ -350,5 +362,41 @@ mod tests {
         step(&mut nav, &mut cam, 500.0, true, true);
         assert_eq!(cam.yaw, yaw1);
         assert!(!close(cam.target, t0));
+    }
+
+    /// Schéma Obview (D-29) : glisser gauche = panoramique (au-delà de 3 px, un clic reste un clic), glisser
+    /// droit = orbite, Alt + droit = zoom.
+    #[test]
+    fn geste_obview() {
+        let s = Settings::default();
+        let view = Rect::from_xywh(0.0, 0.0, 800.0, 600.0);
+        let mut nav = Navigator::default();
+        let mut cam = Camera::default();
+        let step = |nav: &mut Navigator, cam: &mut Camera, x: f32, y: f32, buttons: [bool; 3], alt: bool| {
+            let input = FrameInput {
+                pointer: Some(vec2(x, y)),
+                buttons,
+                modifiers: Modifiers { alt, ..Modifiers::NONE },
+                ..Default::default()
+            };
+            nav.update(&NavContext { input: &input, view, over_ui: false, settings: &s }, cam, &mut |_| None)
+        };
+        let (left, right) = ([true, false, false], [false, false, true]);
+        step(&mut nav, &mut cam, 400.0, 300.0, [false; 3], false);
+        let (t0, yaw0, d0) = (cam.target, cam.yaw, cam.distance);
+        step(&mut nav, &mut cam, 400.0, 300.0, left, false);
+        step(&mut nav, &mut cam, 402.0, 300.0, left, false);
+        assert!(close(cam.target, t0), "2 px : encore un clic");
+        step(&mut nav, &mut cam, 460.0, 300.0, left, false);
+        assert!(!close(cam.target, t0) && cam.yaw == yaw0, "gauche : panoramique");
+        step(&mut nav, &mut cam, 460.0, 300.0, [false; 3], false);
+        step(&mut nav, &mut cam, 460.0, 300.0, right, false);
+        step(&mut nav, &mut cam, 520.0, 300.0, right, false);
+        assert!(cam.yaw != yaw0, "droit : orbite");
+        step(&mut nav, &mut cam, 520.0, 300.0, [false; 3], false);
+        let yaw1 = cam.yaw;
+        step(&mut nav, &mut cam, 520.0, 300.0, right, true);
+        step(&mut nav, &mut cam, 520.0, 360.0, right, true);
+        assert!(cam.yaw == yaw1 && cam.distance != d0, "Alt + droit : zoom");
     }
 }

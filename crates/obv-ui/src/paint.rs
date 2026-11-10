@@ -70,11 +70,21 @@ pub struct DrawList {
     /// Transformation affine appliquée aux glyphes et icônes : pivot (pixels de l'écran) et matrice 2 × 2
     /// (a, b, c, d) : x' = a·x + b·y, y' = c·x + d·y autour du pivot.
     transform: Option<([f32; 2], [f32; 4])>,
+    /// Opacité de groupe en cours (produit des [`DrawList::push_alpha`] ouverts), appliquée à toute primitive.
+    alpha: f32,
+    alphas: Vec<f32>,
 }
 
 impl DrawList {
     pub fn new(scale: f32) -> Self {
-        DrawList { prims: Vec::new(), clips: vec![Rect::INFINITE], scale, transform: None }
+        DrawList {
+            prims: Vec::new(),
+            clips: vec![Rect::INFINITE],
+            scale,
+            transform: None,
+            alpha: 1.0,
+            alphas: Vec::new(),
+        }
     }
 
     pub fn clear(&mut self, scale: f32) {
@@ -82,6 +92,32 @@ impl DrawList {
         self.clips.truncate(1);
         self.scale = scale;
         self.transform = None;
+        self.alpha = 1.0;
+        self.alphas.clear();
+    }
+
+    /// Multiplie l'opacité de tout ce qui est dessiné jusqu'au [`DrawList::pop_alpha`] correspondant
+    /// (fondu d'un groupe : fenêtre, menu).
+    pub fn push_alpha(&mut self, k: f32) {
+        self.alphas.push(self.alpha);
+        self.alpha *= k.clamp(0.0, 1.0);
+    }
+
+    pub fn pop_alpha(&mut self) {
+        if let Some(a) = self.alphas.pop() {
+            self.alpha = a;
+        }
+    }
+
+    /// Ajoute une primitive, couleurs (prémultipliées) atténuées par l'opacité de groupe.
+    fn push(&mut self, mut p: Prim) {
+        if self.alpha < 1.0 {
+            let k = self.alpha;
+            for c in [&mut p.color0, &mut p.color1, &mut p.border] {
+                *c = c.map(|v| v * k);
+            }
+        }
+        self.prims.push(p);
     }
 
     /// Fait tourner le texte et les icônes dessinés ensuite autour de `pivot` (pixels logiques), d'un angle en
@@ -144,7 +180,7 @@ impl DrawList {
         if c0[3] <= 0.0 && c1[3] <= 0.0 && (bw <= 0.0 || bc[3] <= 0.0) {
             return;
         }
-        self.prims.push(Prim {
+        self.push(Prim {
             rect: self.r(rect),
             clip: self.clip(),
             radii: [c.tl * s, c.tr * s, c.br * s, c.bl * s],
@@ -159,7 +195,7 @@ impl DrawList {
     /// Ombre portée floue d'une boîte arrondie (calcul exact par la fonction d'erreur, pas de texture).
     pub fn shadow(&mut self, rect: Rect, radius: f32, blur: f32, offset: Vec2, color: Color) {
         let s = self.scale;
-        self.prims.push(Prim {
+        self.push(Prim {
             rect: self.r(rect.translate(offset)),
             clip: self.clip(),
             radii: [radius * s; 4],
@@ -174,7 +210,7 @@ impl DrawList {
     /// Segment à bouts ronds.
     pub fn line(&mut self, a: Vec2, b: Vec2, width: f32, color: Color) {
         let s = self.scale;
-        self.prims.push(Prim {
+        self.push(Prim {
             rect: [a.x * s, a.y * s, b.x * s, b.y * s],
             clip: self.clip(),
             radii: [0.0; 4],
@@ -190,7 +226,7 @@ impl DrawList {
     pub fn quad(&mut self, pts: [Vec2; 4], fill: Color, border: Option<(f32, Color)>) {
         let s = self.scale;
         let (bw, bc) = border.map(|(w, c)| (w * s, c.premul())).unwrap_or((0.0, [0.0; 4]));
-        self.prims.push(Prim {
+        self.push(Prim {
             rect: [pts[0].x * s, pts[0].y * s, pts[1].x * s, pts[1].y * s],
             clip: self.clip(),
             radii: [pts[2].x * s, pts[2].y * s, pts[3].x * s, pts[3].y * s],
@@ -204,7 +240,7 @@ impl DrawList {
 
     /// Image de couverture (glyphe ou icône) déjà en pixels de l'écran.
     pub fn coverage(&mut self, device_rect: [f32; 4], uv: [f32; 4], color: Color, gamma: f32) {
-        self.prims.push(Prim {
+        self.push(Prim {
             rect: device_rect,
             clip: self.clip(),
             radii: self.transform.map(|(_, m)| m).unwrap_or([1.0, 0.0, 0.0, 1.0]),

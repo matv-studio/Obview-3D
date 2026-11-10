@@ -3,8 +3,33 @@
 
 use std::path::PathBuf;
 
-use obv_ui::{AccentScope, Color, Key, Modifiers, MouseButton, Theme, ThemeKind};
+use obv_ui::{AccentScope, Color, Key, Modifiers, MouseButton, Theme, ThemeKind, tr};
 use serde::{Deserialize, Serialize};
+
+/// Langue de l'interface (D-29) : anglais par défaut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Language {
+    #[default]
+    English,
+    French,
+}
+
+impl Language {
+    pub const ALL: [Language; 2] = [Language::English, Language::French];
+    /// Nom de la langue dans cette langue (jamais traduit).
+    pub fn label(self) -> &'static str {
+        match self {
+            Language::English => "English",
+            Language::French => "Français",
+        }
+    }
+    pub fn lang(self) -> obv_ui::Lang {
+        match self {
+            Language::English => obv_ui::Lang::En,
+            Language::French => obv_ui::Lang::Fr,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeChoice {
@@ -18,7 +43,9 @@ pub enum ThemeChoice {
 /// Schémas de navigation des logiciels courants (D-13).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum NavScheme {
+    /// Clic gauche : panoramique ; clic droit : orbite ; molette ou Alt + clic droit : zoom (D-29).
     #[default]
+    Obview,
     Blender,
     Maya,
     Cinema4D,
@@ -29,7 +56,8 @@ pub enum NavScheme {
 }
 
 impl NavScheme {
-    pub const ALL: [NavScheme; 7] = [
+    pub const ALL: [NavScheme; 8] = [
+        NavScheme::Obview,
         NavScheme::Blender,
         NavScheme::Maya,
         NavScheme::Cinema4D,
@@ -40,6 +68,7 @@ impl NavScheme {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            NavScheme::Obview => "Obview",
             NavScheme::Blender => "Blender",
             NavScheme::Maya => "Maya",
             NavScheme::Cinema4D => "Cinema 4D",
@@ -61,11 +90,11 @@ pub enum NavAction {
 impl NavAction {
     pub const ALL: [NavAction; 3] = [NavAction::Orbit, NavAction::Pan, NavAction::Zoom];
     pub fn label(self) -> &'static str {
-        match self {
+        tr(match self {
             NavAction::Orbit => "Orbite",
             NavAction::Pan => "Panoramique",
             NavAction::Zoom => "Zoom",
-        }
+        })
     }
 }
 
@@ -87,6 +116,11 @@ const fn gk(button: MouseButton, key: char) -> Gesture {
 use MouseButton::{Left as L, Middle as M, Right as R};
 
 type Table = &'static [(NavAction, Gesture)];
+const OBVIEW: Table = &[
+    (NavAction::Pan, g(L, false, false, false)),
+    (NavAction::Orbit, g(R, false, false, false)),
+    (NavAction::Zoom, g(R, false, false, true)),
+];
 const BLENDER: Table = &[
     (NavAction::Orbit, g(M, false, false, false)),
     (NavAction::Pan, g(M, true, false, false)),
@@ -125,6 +159,7 @@ const RHINO: Table = &[
 /// Gestes de glisser de chaque schéma. La molette zoome dans tous les schémas.
 pub fn gestures(s: NavScheme) -> Table {
     match s {
+        NavScheme::Obview => OBVIEW,
         NavScheme::Blender => BLENDER,
         NavScheme::Maya => MAYA,
         NavScheme::Cinema4D => C4D,
@@ -161,7 +196,7 @@ pub fn gesture_keys(gs: &Gesture) -> Vec<&'static str> {
         v.push("Alt");
     }
     if gs.mods.shift {
-        v.push("Maj");
+        v.push(tr("Maj"));
     }
     if let Some(k) = gs.key {
         v.push(match k {
@@ -171,11 +206,11 @@ pub fn gesture_keys(gs: &Gesture) -> Vec<&'static str> {
             _ => "?",
         });
     }
-    v.push(match gs.button {
+    v.push(tr(match gs.button {
         MouseButton::Left => "Gauche",
         MouseButton::Middle => "Milieu",
         MouseButton::Right => "Droit",
-    });
+    }));
     v
 }
 
@@ -191,22 +226,22 @@ pub enum Units {
 impl Units {
     pub const ALL: [Units; 4] = [Units::Millimeters, Units::Centimeters, Units::Meters, Units::Inches];
     pub fn label(self) -> &'static str {
-        match self {
+        tr(match self {
             Units::Millimeters => "Millimètres",
             Units::Centimeters => "Centimètres",
             Units::Meters => "Mètres",
             Units::Inches => "Pouces",
-        }
+        })
     }
     pub fn symbol(self) -> &'static str {
         match self {
             Units::Millimeters => "mm",
             Units::Centimeters => "cm",
             Units::Meters => "m",
-            Units::Inches => "po",
+            Units::Inches => tr("po"),
         }
     }
-    /// Longueur en mètres écrite dans l'unité, à la française.
+    /// Longueur en mètres écrite dans l'unité, selon la langue (virgule ou point décimal).
     pub fn format(self, meters: f64) -> String {
         let (v, digits) = match self {
             Units::Millimeters => (meters * 1000.0, 2),
@@ -214,14 +249,17 @@ impl Units {
             Units::Meters => (meters, 4),
             Units::Inches => (meters / 0.0254, 3),
         };
-        format!("{v:.digits$} {}", self.symbol()).replace('.', ",")
+        format!("{} {}", obv_ui::i18n::decimal(v, digits), self.symbol())
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub language: Language,
     pub theme: ThemeChoice,
+    /// Transitions animées (fenêtres, menus, panneaux, vues de rendu) ; coupées : changements instantanés.
+    pub animations: bool,
     /// Couleur d'accent sRGB `0xRRGGBB` (D-14) ; aucune par défaut (charte : contraste inversé).
     pub accent: Option<u32>,
     /// Étendue de l'accent (charte).
@@ -263,20 +301,20 @@ pub enum GizmoStyle {
 impl GizmoStyle {
     pub const ALL: [GizmoStyle; 4] = [GizmoStyle::Axes, GizmoStyle::Cube, GizmoStyle::Triad, GizmoStyle::None];
     pub fn label(self) -> &'static str {
-        match self {
+        tr(match self {
             GizmoStyle::Axes => "Axes",
             GizmoStyle::Cube => "Cube",
             GizmoStyle::Triad => "Trièdre",
             GizmoStyle::None => "Aucun",
-        }
+        })
     }
     pub fn tooltip(self) -> &'static str {
-        match self {
+        tr(match self {
             GizmoStyle::Axes => "Boules d'axe, comme Blender",
             GizmoStyle::Cube => "Cube à faces nommées : faces, arêtes et coins cliquables",
             GizmoStyle::Triad => "Trièdre compact, comme les logiciels de CAO",
             GizmoStyle::None => "Pas de gizmo",
-        }
+        })
     }
 }
 
@@ -305,7 +343,7 @@ impl ToolButton {
         ToolButton::Frame,
     ];
     pub fn label(self) -> &'static str {
-        match self {
+        tr(match self {
             ToolButton::Select => "Sélection",
             ToolButton::Measure => "Mesurer",
             ToolButton::Section => "Coupe",
@@ -313,8 +351,8 @@ impl ToolButton {
             ToolButton::Render => "Vues de rendu",
             ToolButton::Projection => "Perspective ou orthographique",
             ToolButton::Capture => "Capture",
-            ToolButton::Frame => "Cadrer tout",
-        }
+            ToolButton::Frame => "Focus",
+        })
     }
     pub fn icon(self) -> &'static str {
         match self {
@@ -362,10 +400,12 @@ pub enum Scope {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            language: Language::English,
             theme: ThemeChoice::Dark,
+            animations: true,
             accent: None,
             accent_scope: Scope::Standard,
-            navigation: NavScheme::Blender,
+            navigation: NavScheme::Obview,
             invert_zoom: false,
             zoom_to_cursor: true,
             orbit_around_cursor: true,
@@ -438,10 +478,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blender_par_defaut() {
+    fn obview_par_defaut() {
         let s = Settings::default();
-        assert_eq!(s.navigation, NavScheme::Blender);
+        assert_eq!(s.navigation, NavScheme::Obview);
         let none = Modifiers::NONE;
+        let alt = Modifiers { alt: true, ..none };
+        assert_eq!(resolve(NavScheme::Obview, L, none, &[]), Some(NavAction::Pan));
+        assert_eq!(resolve(NavScheme::Obview, R, none, &[]), Some(NavAction::Orbit));
+        assert_eq!(resolve(NavScheme::Obview, R, alt, &[]), Some(NavAction::Zoom));
         let shift = Modifiers { shift: true, ..none };
         let ctrl = Modifiers { ctrl: true, ..none };
         assert_eq!(resolve(NavScheme::Blender, M, none, &[]), Some(NavAction::Orbit));
@@ -483,7 +527,12 @@ mod tests {
 
     #[test]
     fn unites() {
+        crate::lang::init();
+        obv_ui::i18n::set_lang(obv_ui::Lang::Fr);
         assert_eq!(Units::Millimeters.format(0.0125), "12,50 mm");
         assert_eq!(Units::Inches.format(0.0254), "1,000 po");
+        obv_ui::i18n::set_lang(obv_ui::Lang::En);
+        assert_eq!(Units::Millimeters.format(0.0125), "12.50 mm");
+        assert_eq!(Units::Inches.format(0.0254), "1.000 in");
     }
 }

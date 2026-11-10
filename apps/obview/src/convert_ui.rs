@@ -1,10 +1,11 @@
 //! Fenêtre « Convertir » : format, écart maximal garanti, progression, bilan. Le travail lui-même tourne dans
 //! un fil séparé lancé par la fenêtre de l'application (voir `app.rs`).
 
-use obv_mesh::Format;
+use obv_mesh::{Compression, Format};
 use obv_ui::{
     Align, Edges, Id, Justify, Layer, Node, Size, TextStyle, Ui, Weight,
     controls::{self, TextInput},
+    i18n, tr,
     widgets::{self, ButtonKind},
 };
 
@@ -28,8 +29,8 @@ pub struct ConvertState {
     pub tolerance_mm: f64,
     pub tolerance_text: String,
     pub keep_silhouette: bool,
-    /// GLB : quantification et compression meshoptimizer.
-    pub compress: bool,
+    /// GLB : compression des géométries (D-29).
+    pub compression: Compression,
     /// L'écart a été initialisé pour le modèle ouvert.
     pub initialized: bool,
     pub status: Status,
@@ -44,7 +45,7 @@ impl Default for ConvertState {
             tolerance_mm: 0.0,
             tolerance_text: String::new(),
             keep_silhouette: true,
-            compress: true,
+            compression: Compression::Quantize,
             initialized: false,
             status: Status::Idle,
         }
@@ -56,6 +57,8 @@ impl Default for ConvertState {
 pub enum Request {
     /// Choisir un fichier à ouvrir.
     OpenFile,
+    /// Abandonner la lecture en cours.
+    CancelOpen,
     /// Choisir le fichier de sortie puis convertir.
     Convert,
     /// Ouvrir le fichier produit, pour le comparer.
@@ -70,7 +73,7 @@ fn id(n: &str) -> Id {
     Id::new("convertir").with(n)
 }
 
-/// Millimètres avec trois chiffres significatifs, virgule décimale.
+/// Millimètres avec trois chiffres significatifs, séparateur décimal de la langue.
 fn fmt_mm(v: f64) -> String {
     if v <= 0.0 {
         return "0".into();
@@ -78,7 +81,7 @@ fn fmt_mm(v: f64) -> String {
     let digits = (2 - v.log10().floor() as i32).clamp(0, 6) as usize;
     let s = format!("{v:.digits$}");
     let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
-    s.replace('.', ",")
+    if i18n::is_fr() { s.replace('.', ",") } else { s }
 }
 
 /// Diagonale du modèle en millimètres.
@@ -88,10 +91,14 @@ fn diag_mm(s: &AppState) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Taille lisible : « 25 Ko », « 4,9 Mo ».
+/// Taille lisible : « 25 Ko », « 4,9 Mo » (« 25 KB », « 4.9 MB »).
 pub fn file_size(bytes: usize) -> String {
     let b = bytes as f64;
-    if b < 1e6 { format!("{:.0} Ko", (b / 1e3).max(1.0)) } else { format!("{:.1} Mo", b / 1e6).replace('.', ",") }
+    if b < 1e6 {
+        format!("{:.0} {}", (b / 1e3).max(1.0), tr("Ko"))
+    } else {
+        format!("{} {}", i18n::decimal(b / 1e6, 1), tr("Mo"))
+    }
 }
 
 fn row(ui: &Ui, label: &str, control: Node) -> Node {
@@ -136,7 +143,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
     let fi = Format::ALL.iter().position(|f| *f == s.convert.format).unwrap_or(0);
     let labels: Vec<&str> = Format::ALL.iter().map(|f| f.label()).collect();
     let tabs_fmt = widgets::tabs(ui, fmt_base, &labels, fi).width(Size::Px(240.0));
-    body.push(row(ui, "Format", tabs_fmt));
+    body.push(row(ui, tr("Format"), tabs_fmt));
     body.push(widgets::divider(ui));
 
     // Fidélité ↔ performance : curseur, écart en millimètres (lié au curseur), silhouette.
@@ -159,17 +166,17 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
     let density_ctl = Node::row()
         .gap(10.0)
         .child(
-            Node::text("Fidélité", small, c.text_secondary)
+            Node::text(tr("Fidélité"), small, c.text_secondary)
                 .id(id("fidélité"))
-                .tooltip("Forme exacte, fichier plus lourd"),
+                .tooltip(tr("Forme exacte, fichier plus lourd")),
         )
-        .child(slider.tooltip("Gauche : la forme d'abord. Droite : le moins de triangles possible"))
+        .child(slider.tooltip(tr("Gauche : la forme d'abord. Droite : le moins de triangles possible")))
         .child(
-            Node::text("Performance", small, c.text_secondary)
+            Node::text(tr("Performance"), small, c.text_secondary)
                 .id(id("performance"))
-                .tooltip("Fichier léger, forme approchée"),
+                .tooltip(tr("Fichier léger, forme approchée")),
         );
-    body.push(row(ui, "Densité", density_ctl));
+    body.push(row(ui, tr("Densité"), density_ctl));
     let (input, changed) = controls::text_input(
         ui,
         TextInput {
@@ -193,10 +200,10 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
     }
     body.push(row(
         ui,
-        "Écart maximal",
+        tr("Écart maximal"),
         Node::row()
             .gap(8.0)
-            .child(input.tooltip("Distance maximale garantie entre la forme d'origine et le résultat"))
+            .child(input.tooltip(tr("Distance maximale garantie entre la forme d'origine et le résultat")))
             .child(Node::text("mm", TextStyle::new(13.0, Weight::Regular), c.text_secondary)),
     ));
     let (sil, toggled) = controls::toggle(ui, id("silhouette"), s.convert.keep_silhouette);
@@ -208,22 +215,28 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
     }
     body.push(row(
         ui,
-        "Silhouette",
-        sil.tooltip("Arêtes vives et contours plus fidèles, au prix de quelques triangles"),
+        tr("Silhouette"),
+        sil.tooltip(tr("Arêtes vives et contours plus fidèles, au prix de quelques triangles")),
     ));
     if s.convert.format == Format::Glb {
-        let (comp, toggled) = controls::toggle(ui, id("compression"), s.convert.compress);
-        if let Some(v) = toggled
+        let cur = Compression::ALL.iter().position(|c| *c == s.convert.compression).unwrap_or(1);
+        let (mut comp, picked) =
+            crate::tools::segmented(ui, id("compression"), &[tr("Aucune"), tr("Quantifiée"), "Meshopt"], cur);
+        if let Some(i) = picked
             && !running
         {
-            s.convert.compress = v;
+            s.convert.compression = Compression::ALL[i];
             s.convert.status = Status::Idle;
         }
-        body.push(row(
-            ui,
-            "Compression",
-            comp.tooltip("Quantification et compression meshoptimizer : fichier 2 à 3 fois plus léger"),
-        ));
+        let tips = [
+            "Flottants : lisible partout",
+            "KHR_mesh_quantization : environ deux fois plus léger ; Blender, Unity, Unreal, three.js, Babylon.js",
+            "EXT_meshopt_compression : le plus léger, pour le web (three.js, Babylon.js) ; Blender ne le lit pas",
+        ];
+        for (child, tip) in comp.children.iter_mut().zip(tips) {
+            child.tooltip = Some(obv_ui::Tooltip { text: tr(tip).into(), shortcut: None });
+        }
+        body.push(row(ui, tr("Compression"), comp.width(Size::Px(280.0))));
     }
     body.push(widgets::divider(ui));
     body.push(Node::new().height(Size::Px(14.0)));
@@ -237,10 +250,10 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                 Node::row()
                     .width(Size::Fill(1.0))
                     .gap(10.0)
-                    .child(stat(ui, "Triangles", compact(*triangles_out), true))
-                    .child(stat(ui, "Réduction", format!("{:.0} %", 100.0 - ratio).replace('.', ","), false))
-                    .child(stat(ui, "Écart mesuré", format!("{} mm", fmt_mm(*deviation_mm)), false))
-                    .child(stat(ui, "Taille", file_size(*bytes), false)),
+                    .child(stat(ui, tr("Triangles"), compact(*triangles_out), true))
+                    .child(stat(ui, tr("Réduction"), i18n::with_unit(&format!("{:.0}", 100.0 - ratio), "%"), false))
+                    .child(stat(ui, tr("Écart mesuré"), format!("{} mm", fmt_mm(*deviation_mm)), false))
+                    .child(stat(ui, tr("Taille"), file_size(*bytes), false)),
             );
         }
         Status::Failed(e) => {
@@ -253,7 +266,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                     .bg(c.danger_bg)
                     .child(Node::icon("alert", 15.0, c.danger))
                     .child(
-                        Node::text(e.clone(), TextStyle::new(12.5, Weight::Medium), c.danger)
+                        Node::text(i18n::tr_message(e), TextStyle::new(12.5, Weight::Medium), c.danger)
                             .width(Size::Fill(1.0))
                             .truncate(),
                     ),
@@ -264,15 +277,15 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                 Node::row()
                     .width(Size::Fill(1.0))
                     .gap(10.0)
-                    .child(stat(ui, "Pièces", group(s.parts.len()), false))
-                    .child(stat(ui, "Triangles", compact(tri_in), false))
+                    .child(stat(ui, tr("Pièces"), group(s.parts.len()), false))
+                    .child(stat(ui, tr("Triangles"), compact(tri_in), false))
                     .child(stat(
                         ui,
-                        "Écart garanti",
+                        tr("Écart garanti"),
                         if s.convert.tolerance_mm > 0.0 {
                             format!("{} mm", fmt_mm(s.convert.tolerance_mm))
                         } else {
-                            "Exact".into()
+                            tr("Exact").into()
                         },
                         true,
                     )),
@@ -309,37 +322,37 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         footer.push(widgets::button(
             ui,
             id("dossier"),
-            "Dossier",
+            tr("Dossier"),
             Some("open"),
             ButtonKind::Secondary,
-            "Montrer le fichier",
+            tr("Montrer le fichier"),
         ));
         footer.push(Node::spacer());
         footer.push(widgets::button(
             ui,
             id("ouvrir"),
-            "Ouvrir le résultat",
+            tr("Ouvrir le résultat"),
             Some("file"),
             ButtonKind::Primary,
-            "Ouvrir le fichier produit pour le comparer",
+            tr("Ouvrir le fichier produit pour le comparer"),
         ));
     } else {
         footer.push(Node::spacer());
         if ui.clicked(id("annuler")) && !running {
             s.convert.open = false;
         }
-        footer.push(widgets::button(ui, id("annuler"), "Annuler", None, ButtonKind::Secondary, "Fermer"));
+        footer.push(widgets::button(ui, id("annuler"), tr("Annuler"), None, ButtonKind::Secondary, tr("Fermer")));
         if ui.clicked(id("lancer")) && !running {
             s.requests.push(Request::Convert);
         }
-        let label = if running { "Conversion…" } else { "Convertir" };
+        let label = tr(if running { "Conversion…" } else { "Convertir" });
         let mut b = widgets::button(
             ui,
             id("lancer"),
             label,
             Some("convert"),
             ButtonKind::Primary,
-            "Choisir le fichier de sortie et convertir",
+            tr("Choisir le fichier de sortie et convertir"),
         );
         if running {
             b = b.opacity(0.6);
@@ -347,7 +360,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         footer.push(b);
     }
     let body = Node::column().align(Align::Stretch).child(body);
-    let (node, close) = controls::modal(ui, Id::new("convertir"), "Convertir", (640.0, 482.0), body, footer);
+    let (node, close) = controls::modal(ui, Id::new("convertir"), tr("Convertir"), (640.0, 482.0), body, footer);
     if close && !running {
         s.convert.open = false;
     }

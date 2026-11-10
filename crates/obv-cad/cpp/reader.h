@@ -6,7 +6,8 @@
 namespace obv {
 struct CadOptions;
 struct CadResult;
+struct CadProgress;
 
-CadResult read_cad(rust::Str path, bool iges, const CadOptions& options);
+CadResult read_cad(rust::Str path, bool iges, const CadOptions& options, const CadProgress& progress);
 bool write_test_step(rust::Str path);
 } // namespace obv

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use obv_gpu::{Gpu, RenderTarget, Result};
 use obv_io::Model;
-use obv_render::{Band, MeshInput, RenderMode, SceneParams, SceneRenderer, feature_edges};
+use obv_render::{MeshInput, RenderMode, SceneParams, SceneRenderer, feature_edges};
 use obv_ui::{Theme, ThemeKind, Ui, gpu::UiRenderer};
 use rayon::prelude::*;
 
@@ -40,10 +40,19 @@ pub fn draw_viewport(
     theme: &Theme,
     scale: f32,
 ) {
-    draw_view(scene, cmd, state, theme, state.viewport.get(), scale, false);
+    draw_view(scene, cmd, state, theme, state.viewport.get(), scale, Target::Screen);
 }
 
-/// Comme [`draw_viewport`] pour une vue `v` (pixels logiques) quelconque ; `transparent` : sans fond.
+/// Destination d'une image de la vue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// Écran : transitions en cours comprises.
+    Screen,
+    /// Capture : état au repos ; `transparent` : sans fond.
+    Capture { transparent: bool },
+}
+
+/// Comme [`draw_viewport`] pour une vue `v` (pixels logiques) quelconque.
 pub fn draw_view(
     scene: &SceneRenderer,
     cmd: obv_gpu::vk::CommandBuffer,
@@ -51,8 +60,10 @@ pub fn draw_view(
     theme: &Theme,
     v: obv_ui::Rect,
     scale: f32,
-    transparent: bool,
+    target: Target,
 ) {
+    let animated = target == Target::Screen;
+    let transparent = target == Target::Capture { transparent: true };
     let rect = [v.min.x * scale, v.min.y * scale, v.max.x * scale, v.max.y * scale];
     let c = &theme.color;
     let cam = &state.camera;
@@ -61,30 +72,17 @@ pub fn draw_view(
     if let Err(e) = scene.set_params(cam, &params) {
         eprintln!("Obview 3D : paramètres de l'image : {e}");
     }
-    let background = |top: [f32; 4], bottom: [f32; 4]| {
+    // Vue normale et bandes des rendus selon les limites animées (au repos : l'état exact de l'inspecteur).
+    let cuts = if animated { state.inspector_cuts } else { inspector::target_cuts(state.inspector) };
+    let top = [c.viewport_top.r, c.viewport_top.g, c.viewport_top.b, 1.0];
+    let bottom = [c.viewport_bottom.r, c.viewport_bottom.g, c.viewport_bottom.b, 1.0];
+    let gray = inspector::background(theme.kind == ThemeKind::Dark);
+    for (m, band) in inspector::device_regions(v, &cuts, scale) {
+        let (t, b) = if m.is_some() { (gray, gray) } else { (top, bottom) };
         if !transparent {
-            scene.draw_background(cmd, rect, top, bottom);
+            scene.draw_background_band(cmd, rect, t, b, band);
         }
-    };
-    match state.inspector {
-        Inspector::Off => {
-            let top = [c.viewport_top.r, c.viewport_top.g, c.viewport_top.b, 1.0];
-            let bottom = [c.viewport_bottom.r, c.viewport_bottom.g, c.viewport_bottom.b, 1.0];
-            background(top, bottom);
-            scene.draw_scene(cmd, rect, cam, RenderMode::Lit, Band::ALL);
-        }
-        Inspector::Bands => {
-            let bg = inspector::background(theme.kind == ThemeKind::Dark);
-            background(bg, bg);
-            for (m, band) in inspector::device_bands(v, state, scale) {
-                scene.draw_scene(cmd, rect, cam, m, band);
-            }
-        }
-        Inspector::Single(m) => {
-            let bg = inspector::background(theme.kind == ThemeKind::Dark);
-            background(bg, bg);
-            scene.draw_scene(cmd, rect, cam, m, Band::ALL);
-        }
+        scene.draw_scene(cmd, rect, cam, m.unwrap_or(RenderMode::Lit), band);
     }
 }
 
@@ -111,7 +109,7 @@ pub fn capture(
     let scale = w as f32 / v.width().max(1.0);
     let view = obv_ui::Rect::from_xywh(0.0, 0.0, v.width(), v.height());
     let clear = if transparent { [0.0; 4] } else { [0.0, 0.0, 0.0, 1.0] };
-    target.render(clear, |cmd| draw_view(&scene, cmd, state, theme, view, scale, transparent))?;
+    target.render(clear, |cmd| draw_view(&scene, cmd, state, theme, view, scale, Target::Capture { transparent }))?;
     let rgba = target.read_rgba8();
     Ok(if ss == 1 { rgba } else { downsample(&rgba, w, h, ss) })
 }

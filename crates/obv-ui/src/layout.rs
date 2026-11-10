@@ -536,30 +536,36 @@ impl Node {
             return;
         }
         let s = &self.style;
-        let fade = |c: Color| c.mul_alpha(s.opacity);
+        // Opacité de groupe : le nœud et tout son contenu.
+        let grouped = s.opacity < 1.0;
+        if grouped {
+            if s.opacity <= 0.0 {
+                return;
+            }
+            p.dl.push_alpha(s.opacity);
+        }
         for sh in s.shadows.iter().flatten() {
-            p.dl.shadow(r, s.radius.tl, sh.blur, sh.offset, fade(sh.color));
+            p.dl.shadow(r, s.radius.tl, sh.blur, sh.offset, sh.color);
         }
         if s.bg.is_some() || s.border.is_some() {
             let fill = match s.bg {
-                Some(Fill::Solid(c)) => Fill::Solid(fade(c)),
-                Some(Fill::Vertical(a, b)) => Fill::Vertical(fade(a), fade(b)),
+                Some(f) => f,
                 None => Fill::Solid(Color::TRANSPARENT),
             };
-            p.dl.rect(r, s.radius, fill, s.border.map(|(w, c)| (w, fade(c))));
+            p.dl.rect(r, s.radius, fill, s.border);
         }
         let px = 1.0 / p.dl.scale;
         if let Some(c) = s.border_bottom {
-            p.dl.rect(Rect::from_xywh(r.min.x, r.max.y - px, r.width(), px), 0.0, fade(c), None);
+            p.dl.rect(Rect::from_xywh(r.min.x, r.max.y - px, r.width(), px), 0.0, c, None);
         }
         if let Some(c) = s.border_top {
-            p.dl.rect(Rect::from_xywh(r.min.x, r.min.y, r.width(), px), 0.0, fade(c), None);
+            p.dl.rect(Rect::from_xywh(r.min.x, r.min.y, r.width(), px), 0.0, c, None);
         }
         if let Some(c) = s.border_right {
-            p.dl.rect(Rect::from_xywh(r.max.x - px, r.min.y, px, r.height()), 0.0, fade(c), None);
+            p.dl.rect(Rect::from_xywh(r.max.x - px, r.min.y, px, r.height()), 0.0, c, None);
         }
         if let Some(c) = s.border_left {
-            p.dl.rect(Rect::from_xywh(r.min.x, r.min.y, px, r.height()), 0.0, fade(c), None);
+            p.dl.rect(Rect::from_xywh(r.min.x, r.min.y, px, r.height()), 0.0, c, None);
         }
         if s.clip {
             p.dl.push_clip(r);
@@ -574,10 +580,10 @@ impl Node {
                     p.res.fonts.layout(text, *style, p.dl.scale)
                 };
                 let y = inner.min.y + ((inner.height() - layout.height) * 0.5).round();
-                p.res.fonts.draw(p.dl, p.res.atlas, &layout, vec2(inner.min.x, y), fade(*color));
+                p.res.fonts.draw(p.dl, p.res.atlas, &layout, vec2(inner.min.x, y), *color);
             }
             Content::Icon { name, size, color } => {
-                p.res.icons.draw(p.dl, p.res.atlas, name, inner, *size, fade(*color));
+                p.res.icons.draw(p.dl, p.res.atlas, name, inner, *size, *color);
             }
             Content::Custom(f) => f(p, inner),
         }
@@ -597,6 +603,9 @@ impl Node {
             let color = if hot { p.theme.color.thumb_hover } else { p.theme.color.thumb };
             let pill = Rect::from_xywh(cx - 2.0, t.min.y, 4.0, t.height());
             p.dl.rect(pill, 2.0, color, None);
+        }
+        if grouped {
+            p.dl.pop_alpha();
         }
     }
 

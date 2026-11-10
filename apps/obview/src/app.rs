@@ -13,9 +13,9 @@ use std::{
 };
 
 use obv_gpu::{FRAMES_IN_FLIGHT, Gpu, GpuDesc, PresentMode, Swapchain};
-use obv_io::Model;
+use obv_io::{Model, Progress, Stage};
 use obv_render::{Camera, SceneRenderer};
-use obv_ui::{Cursor, FrameInput, Id, Key, Modifiers, Ui, Vec2, gpu::UiRenderer, vec2};
+use obv_ui::{Cursor, FrameInput, Id, Key, Modifiers, Ui, Vec2, gpu::UiRenderer, tr, vec2};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -28,11 +28,11 @@ use winit::{
 
 use crate::{
     convert_ui::{Request, Status},
-    demo,
     frame::{self, EdgeCache, SceneKey, draw_viewport, mesh_inputs},
     inspector::{self, Inspector},
+    loading::{Loading, Notice},
     navigation::{NavContext, Navigator, WHEEL_NOTCH_PX},
-    settings::{Settings, resolve},
+    settings::Settings,
     shell::{self, AppState, Tool},
     tools::{self, CaptureSize, MeasurePoint, Snap},
     views::ViewStore,
@@ -45,6 +45,8 @@ struct Pending {
     buttons: [bool; 3],
     /// Appuis survenus depuis la dernière image : visibles au moins une image même si le bouton est déjà relâché.
     latched: [bool; 3],
+    /// Appuis gauches depuis la dernière image (double-clic reçu en un seul lot quand les images sont lentes).
+    left_presses: u8,
     modifiers: Modifiers,
     /// Modificateurs tenus au moment d'une frappe (Ctrl+F reçu en un seul lot d'événements).
     key_mods: Modifiers,
@@ -76,7 +78,11 @@ pub struct App {
     state: AppState,
     model: Arc<Model>,
     proxy: EventLoopProxy<Wake>,
-    loading: Option<Receiver<Loaded>>,
+    /// Lecture en cours : réponse du fil, avancement partagé, début.
+    loading: Option<(Receiver<Loaded>, Arc<Progress>, Instant)>,
+    /// Modèle lu, installé à l'image suivante : la carte d'ouverture montre d'abord « Préparation » (l'envoi au
+    /// GPU se fait sur le fil de la fenêtre).
+    ready: Option<(PathBuf, Model, bool)>,
     converting: Option<(Receiver<Converted>, Arc<AtomicU32>)>,
     nav: Navigator,
     pending: Pending,
@@ -96,16 +102,28 @@ pub struct App {
     file_key: String,
     /// Dernier pointeur pour lequel le point de mesure survolé a été calculé.
     measure_at: Option<Vec2>,
+    /// Dernier clic dans la vue : instant et pièce touchée (double-clic).
+    last_click: Option<(f64, Option<usize>)>,
+    /// Appuis gauches reçus dans l'image de l'appui en cours.
+    press_burst: u8,
 }
 
 /// Lit un fichier : STEP / IGES par OpenCASCADE (D-27), les maillages par les lecteurs d'Obview.
 pub fn load(path: &std::path::Path) -> Result<Model, String> {
+    load_with(path, &Progress::default())
+}
+
+/// Comme [`load`], en publiant l'avancement dans `progress` (étapes mesurées pour STEP / IGES).
+pub fn load_with(path: &std::path::Path, progress: &Progress) -> Result<Model, String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if obv_cad::EXTENSIONS.contains(&ext.as_str()) {
-        obv_cad::read(path, obv_cad::Options::default()).map_err(|e| e.to_string())
+    let r = if obv_cad::EXTENSIONS.contains(&ext.as_str()) {
+        obv_cad::read_with(path, obv_cad::Options::default(), progress).map_err(|e| e.to_string())
     } else {
+        progress.stage(Stage::Read);
         obv_io::read(path).map_err(|e| e.to_string())
-    }
+    };
+    progress.stage(Stage::Prepare);
+    r
 }
 
 /// Extensions proposées à l'ouverture.
@@ -120,8 +138,9 @@ pub fn extensions() -> Vec<&'static str> {
 
 impl App {
     pub fn new(path: Option<PathBuf>, proxy: EventLoopProxy<Wake>) -> Self {
-        let model = demo::bracket();
-        let mut state = AppState::new("support.step", &model);
+        // Démarrage sans modèle : la vue propose d'ouvrir un fichier.
+        let model = Model::default();
+        let mut state = AppState::new("", &model);
         state.settings = Settings::load();
         let ui = Ui::new(shell::theme(&state));
         let mut app = App {
@@ -131,6 +150,7 @@ impl App {
             model: Arc::new(model),
             proxy,
             loading: None,
+            ready: None,
             converting: None,
             nav: Navigator::default(),
             pending: Pending::default(),
@@ -143,8 +163,10 @@ impl App {
             error: None,
             cube_dragged: false,
             views: ViewStore::load(),
-            file_key: "démo".into(),
+            file_key: String::new(),
             measure_at: None,
+            last_click: None,
+            press_burst: 0,
         };
         app.state.views.list = app.views.0.get(&app.file_key).cloned().unwrap_or_default();
         if let Some(p) = path {
@@ -153,17 +175,36 @@ impl App {
         app
     }
 
-    /// Lit `path` dans un fil séparé ; l'interface reste vivante (indicateur dans la barre du haut).
+    /// Lit `path` dans un fil séparé ; l'interface reste vivante (ligne d'activité, carte d'ouverture). Une
+    /// lecture en cours est annulée.
     fn open(&mut self, path: PathBuf) {
+        self.cancel_open();
+        self.state.notice = None;
         let (tx, rx) = channel();
         let proxy = self.proxy.clone();
-        self.state.loading = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        let progress = Arc::new(Progress::default());
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.state.loading = Some(Loading::new(name));
+        let p = progress.clone();
         std::thread::spawn(move || {
-            let r = load(&path);
+            let r = load_with(&path, &p);
             let _ = tx.send((path, r));
             let _ = proxy.send_event(Wake);
         });
-        self.loading = Some(rx);
+        self.loading = Some((rx, progress, Instant::now()));
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+    }
+
+    /// Abandonne la lecture en cours : OpenCASCADE s'arrête au plus tôt ; les autres lecteurs finissent seuls,
+    /// leur résultat est ignoré.
+    fn cancel_open(&mut self) {
+        if let Some((_, p, _)) = self.loading.take() {
+            p.cancel();
+        }
+        self.ready = None;
+        self.state.loading = None;
     }
 
     fn finish_open(&mut self, path: PathBuf, m: Model) {
@@ -184,14 +225,51 @@ impl App {
 
     /// Réponses des fils de travail.
     fn poll_jobs(&mut self) {
-        if let Some(rx) = &self.loading
-            && let Ok((path, r)) = rx.try_recv()
+        // Modèle reçu à l'image précédente (carte « Préparation » montrée) : installé maintenant.
+        if let Some((_, _, shown)) = &self.ready
+            && *shown
+            && let Some((path, m, _)) = self.ready.take()
         {
-            self.loading = None;
             self.state.loading = None;
-            match r {
-                Ok(m) => self.finish_open(path, m),
-                Err(e) => self.error = Some(e),
+            self.finish_open(path, m);
+        }
+        if let Some((rx, progress, started)) = &self.loading {
+            match rx.try_recv() {
+                Ok((path, r)) => {
+                    if std::env::var_os("OBV_DEBUG_LOAD").is_some() {
+                        eprintln!("lecture : terminée à {:.2} s", started.elapsed().as_secs_f64());
+                    }
+                    self.loading = None;
+                    match r {
+                        Ok(m) => {
+                            if let Some(l) = &mut self.state.loading {
+                                l.stage = Stage::Prepare;
+                                l.fraction = None;
+                            }
+                            self.ready = Some((path, m, false));
+                        }
+                        Err(e) => {
+                            self.state.loading = None;
+                            eprintln!("Obview 3D : {}", e);
+                            self.state.notice = Some(Notice {
+                                title: "Impossible d'ouvrir",
+                                subject: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                                detail: e,
+                            });
+                        }
+                    }
+                }
+                Err(_) => {
+                    let (stage, fraction) = progress.get();
+                    if let Some(l) = &mut self.state.loading {
+                        if l.stage != stage && std::env::var_os("OBV_DEBUG_LOAD").is_some() {
+                            eprintln!("lecture : {:?} → {stage:?} à {:.2} s", l.stage, started.elapsed().as_secs_f64());
+                        }
+                        l.stage = stage;
+                        l.fraction = fraction;
+                        l.elapsed = started.elapsed().as_secs_f64();
+                    }
+                }
             }
         }
         if let Some((rx, progress)) = &self.converting {
@@ -220,11 +298,12 @@ impl App {
         let window = self.gfx.as_ref().map(|g| g.window.clone());
         for req in std::mem::take(&mut self.state.requests) {
             match req {
+                Request::CancelOpen => self.cancel_open(),
                 Request::OpenFile => {
                     let mut d = rfd::FileDialog::new()
-                        .set_title("Ouvrir")
-                        .add_filter("Modèles 3D", &extensions())
-                        .add_filter("Tous les fichiers", &["*"]);
+                        .set_title(tr("Ouvrir"))
+                        .add_filter(tr("Modèles 3D"), &extensions())
+                        .add_filter(tr("Tous les fichiers"), &["*"]);
                     if let Some(w) = &window {
                         d = d.set_parent(w.as_ref());
                     }
@@ -237,15 +316,15 @@ impl App {
                         format: self.state.convert.format,
                         tolerance_m: self.state.convert.tolerance_mm / 1000.0,
                         keep_silhouette: self.state.convert.keep_silhouette,
-                        compress: self.state.convert.compress,
+                        compression: self.state.convert.compression,
                     };
                     let stem = std::path::Path::new(&self.state.file_name)
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "modele".into());
+                        .unwrap_or_else(|| tr("modele").into());
                     let ext = opts.format.extension();
                     let mut d = rfd::FileDialog::new()
-                        .set_title("Convertir")
+                        .set_title(tr("Convertir"))
                         .set_file_name(format!("{stem}.{ext}"))
                         .add_filter(opts.format.label(), &[ext]);
                     if let Some(w) = &window {
@@ -259,17 +338,22 @@ impl App {
                     let stem = std::path::Path::new(&self.state.file_name)
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "vue".into());
+                        .unwrap_or_else(|| tr("vue").into());
                     let mut d = rfd::FileDialog::new()
-                        .set_title("Capture")
+                        .set_title(tr("Capture"))
                         .set_file_name(format!("{stem}.png"))
-                        .add_filter("Image PNG", &["png"]);
+                        .add_filter(tr("Image PNG"), &["png"]);
                     if let Some(w) = &window {
                         d = d.set_parent(w.as_ref());
                     }
                     let Some(path) = d.save_file() else { continue };
                     if let Err(e) = self.save_capture(&path, size, transparent) {
-                        self.error = Some(format!("capture : {e}"));
+                        eprintln!("Obview 3D : capture : {e}");
+                        self.state.notice = Some(Notice {
+                            title: "Capture impossible",
+                            subject: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                            detail: e.to_string(),
+                        });
                     }
                 }
                 Request::Reveal(p) => reveal(&p),
@@ -428,6 +512,7 @@ impl App {
         }
         let scale = gfx.window.scale_factor() as f32;
         let size = vec2(phys.width as f32 / scale, phys.height as f32 / scale);
+        let burst = std::mem::take(&mut self.pending.left_presses);
         let (input, again) = Self::frame_input(&mut self.pending, self.start, size, scale);
         let now = input.time;
         let prev_buttons = self.ui.input.buttons;
@@ -447,15 +532,18 @@ impl App {
         let moved = self.nav.update(&ctx, &mut self.state.camera, &mut pick);
         let left_pressed = input.buttons[0] && !prev_buttons[0];
         let left_released = !input.buttons[0] && prev_buttons[0];
-        let plain_left =
-            resolve(self.state.settings.navigation, obv_ui::MouseButton::Left, input.modifiers, &input.held).is_none();
+        // Un clic gauche sans déplacement sélectionne, même quand le glisser gauche navigue (schéma Obview).
         if left_pressed
-            && plain_left
             && !over_ui
             && let Some(p) = input.pointer
             && view.contains(p)
         {
             self.click_origin = Some(p);
+            self.press_burst = burst;
+        }
+        // Appuis arrivés pendant que le bouton paraît tenu (images lentes : deux clics à cheval sur deux images).
+        if !left_pressed && input.buttons[0] && burst > 0 && self.click_origin.is_some() {
+            self.press_burst = self.press_burst.saturating_add(burst);
         }
         if left_released && let (Some(o), Some(p)) = (self.click_origin.take(), input.pointer) {
             let d = p - o;
@@ -474,13 +562,27 @@ impl App {
             } else if d.x.abs() + d.y.abs() < 4.0 {
                 let px = [(p.x - view.min.x) * scale, (p.y - view.min.y) * scale];
                 let hit = gfx.scene.pick(&self.state.camera, [view.width() * scale, view.height() * scale], px);
-                self.state.selected = hit.ok().flatten().map(|h| h.id as usize);
+                let part = hit.ok().flatten().map(|h| h.id as usize);
+                // Double-clic sur une pièce : sélection et panneau des propriétés ouvert.
+                let double = part.is_some()
+                    && (self.press_burst >= 2
+                        || (self.last_click.is_some_and(|(t, q)| now - t < 0.45 && q == part)
+                            && self.state.selected == part));
+                self.state.selected = part;
+                if double {
+                    self.state.right_open = true;
+                    self.last_click = None;
+                } else {
+                    self.last_click = Some((now, part));
+                }
             }
         }
+        // Focus : la pièce sélectionnée, sinon tout le modèle (bouton ou F).
         if self.ui.clicked(Id::new("cadrer"))
+            || self.ui.clicked(Id::new("cadrer pièce"))
             || (!self.ui.text_focused() && input.keys.contains(&Key::Char('f')) && !input.modifiers.ctrl)
         {
-            frame_all(&mut self.nav, &self.state.camera, &self.model, view, now);
+            focus(&mut self.nav, &self.state, &self.model, view, now);
         }
         // Gizmo de navigation : clic sur un axe, une face, une arête ou un coin ; glisser pour tourner.
         let cube = Id::new("gizmo");
@@ -508,14 +610,6 @@ impl App {
                     self.cube_dragged = true;
                 }
             }
-        }
-        if self.ui.clicked(Id::new("cadrer pièce"))
-            && let Some(i) = self.state.selected
-            && let Some((lo, hi)) = self.model.parts.get(i).and_then(|p| p.mesh.bounds())
-        {
-            let mut to = self.state.camera;
-            to.frame(lo, hi, (view.width() / view.height().max(1.0)) as f64);
-            self.nav.animate_to(&self.state.camera, to, now);
         }
         // Mesure : point survolé (accroche), recalculé quand le pointeur bouge.
         if self.state.tool == Tool::Measure && !over_ui && !self.nav.dragging() {
@@ -591,6 +685,13 @@ impl App {
         if let Some(e) = prep_err {
             self.error = Some(e.to_string());
         }
+        // La carte « Préparation » est à l'écran : le modèle sera installé à l'image suivante.
+        if let Some(r) = &mut self.ready
+            && !r.2
+        {
+            r.2 = true;
+            gfx.window.request_redraw();
+        }
         if let Some(e) = self.error.take() {
             eprintln!("Obview 3D : {e}");
         }
@@ -631,10 +732,21 @@ impl App {
     }
 }
 
-fn frame_all(nav: &mut Navigator, cam: &Camera, model: &Model, view: obv_ui::Rect, now: f64) {
-    if let Some((lo, hi)) = model.bounds() {
+/// Cadre la pièce sélectionnée (à sa place dans la vue éclatée), sinon tout le modèle. Les bornes de profondeur
+/// de la projection orthographique restent celles de la scène entière.
+fn focus(nav: &mut Navigator, state: &AppState, model: &Model, view: obv_ui::Rect, now: f64) {
+    let cam = &state.camera;
+    let bounds = match state.selected.and_then(|i| model.parts.get(i).map(|p| (i, p))) {
+        Some((i, p)) => p.mesh.bounds().map(|(lo, hi)| {
+            let o = tools::explode_offsets(state).get(i).copied().unwrap_or([0.0; 3]);
+            (std::array::from_fn(|k| lo[k] + o[k]), std::array::from_fn(|k| hi[k] + o[k]))
+        }),
+        None => model.bounds(),
+    };
+    if let Some((lo, hi)) = bounds {
         let mut to = *cam;
         to.frame(lo, hi, (view.width() / view.height().max(1.0)) as f64);
+        to.radius = cam.radius.max(to.radius);
         nav.animate_to(cam, to, now);
     }
 }
@@ -775,6 +887,9 @@ impl ApplicationHandler<Wake> for App {
                 self.pending.buttons[i] = down;
                 if down {
                     self.pending.latched[i] = true;
+                    if i == 0 {
+                        self.pending.left_presses = self.pending.left_presses.saturating_add(1);
+                    }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -815,7 +930,12 @@ impl ApplicationHandler<Wake> for App {
                 self.pending.held.clear();
                 self.pending.buttons = [false; 3];
             }
-            WindowEvent::DroppedFile(path) => self.open(path),
+            WindowEvent::DroppedFile(path) => {
+                self.state.drop_hover = false;
+                self.open(path);
+            }
+            WindowEvent::HoveredFile(_) => self.state.drop_hover = true,
+            WindowEvent::HoveredFileCancelled => self.state.drop_hover = false,
             WindowEvent::RedrawRequested => {
                 self.redraw();
                 redraw = false;

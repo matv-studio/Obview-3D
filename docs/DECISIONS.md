@@ -303,3 +303,45 @@ survol, info-bulle qui nomme la direction visée, 26 directions au clic, glisser
   avant la publication.
 - Logo de l'application (tuile sombre, cube isométrique de l'icône « pièce ») : icône de l'exécutable
   (ressource Windows) et de la fenêtre.
+
+## D-29 · Souris, transitions, ouverture, export lisible par Blender, langue (10/11/2026)
+Demandes de l'utilisateur du 10/11/2026.
+- Navigation : nouveau schéma « Obview », par défaut (remplace Blender, D-13, qui reste au choix) : glisser
+  gauche = panoramique, glisser droit = orbite, molette ou Alt + droit = zoom. Le clic gauche sélectionne
+  toujours : le panoramique ne démarre qu'au-delà de 3 px. Un fichier de réglages existant garde son schéma.
+- Outils : recliquer l'outil actif (ou sa touche) revient à Sélection. « Cadrer tout » devient « Focus » : F
+  ou le bouton cadre la pièce sélectionnée (décalée par la vue éclatée), sinon tout le modèle. Double-clic sur
+  une pièce : sélection et panneau des propriétés ouvert ; les appuis sont comptés au niveau des événements,
+  pour qu'un double-clic reste reconnu quand les images sont lentes.
+- Vues de rendu : R affiche les bandes ; depuis un rendu isolé, R réaffiche les bandes (il ne coupe plus les
+  vues de rendu) ; depuis les bandes, R revient à la vue normale.
+- Transitions : fenêtres en fondu et glissement de 8 px (200 ms, voile compris), menus 120 ms (charte),
+  panneaux d'outil 160 ms, panneaux latéraux en glissement (200 ms), vues de rendu : six limites animées
+  (350 ms) entre la vue normale et les bandes, les bandes entrent depuis la droite, un rendu choisi s'élargit à
+  toute la vue. Mécanismes de `obv-ui` : opacité de groupe (le nœud et tout son contenu), `appear` (0 → 1 à la
+  première image où un élément est demandé), `tween` (transition minutée, reprise depuis la valeur atteinte),
+  fond de la vue limité à une bande. Réglage Apparence › Animations pour les couper.
+- Démarrage sans modèle : zone d'ouverture au centre de la vue (cadre en pointillés `line-strong` de la charte,
+  dossier en transparence, info-bulle « Ouvrir un fichier · Ctrl O »), mise en avant au survol et quand un
+  fichier est glissé sur la fenêtre ; barre du bas, gizmo, poignées et nom de document masqués, Convertir
+  grisé.
+- Ouverture longue : ligne d'activité de 2 px en haut de la fenêtre (charte) et carte au centre de la vue :
+  nom, étape (Lecture, Import, Maillage, Préparation), pourcentage, temps écoulé, annulation (✕ ou Échap).
+  Avancement réel pour STEP / IGES : indicateur OpenCASCADE (`Message_ProgressIndicator`) relié à Rust par
+  `cxx` pour l'import, maillage compté en formes de référence, arrêt au plus tôt sur annulation. Analyse du
+  fichier (`ReadFile`) sans mesure possible : barre indéterminée. Parts des étapes relevées sur la montre
+  (11,6 s en version optimisée : analyse 11 %, import 65 %, maillage 23 %). Le modèle est installé à l'image
+  suivant l'affichage de « Préparation » (envoi au GPU sur le fil de la fenêtre). Échec : avis en haut de la
+  vue (titre, fichier, détail), au lieu de la seule console.
+- Export GLB : Blender refuse `EXT_meshopt_compression` (absent de la liste des extensions de son importeur).
+  Compression au choix dans la fenêtre Convertir : Aucune (flottants), Quantifiée (`KHR_mesh_quantization`,
+  par défaut, lue par Blender, Unity, Unreal, three.js, Babylon.js), Meshopt (le plus léger, pour le web).
+  Draco (lu par Blender) écarté pour l'instant : la construction de la bibliothèque de Google a été refusée
+  dans la session ; options laissées à l'utilisateur.
+- Langue : anglais par défaut, français au choix (Apparence › Langue). Textes écrits en français dans le code,
+  traduits à l'affichage par `obv_ui::tr` (tables par crate, langue propre au fil) ; nombres selon la langue
+  (séparateurs des milliers et des décimales, espace avant les unités) ; noms numérotés des lecteurs
+  (« Pièce 12 ») traduits à l'affichage ; messages des lecteurs traduits par leur début connu. Un essai relève
+  chaque `tr("…")` du code et exige sa traduction. Ligne de commande : options anglaises (`--convert`,
+  `--tolerance`, `--no-silhouette`, `--no-compression`), noms français toujours acceptés, messages dans la
+  langue des réglages.

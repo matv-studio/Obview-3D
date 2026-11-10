@@ -4,9 +4,13 @@ layout(location = 0) out vec4 out_color;
 layout(push_constant) uniform Push {
     vec4 top;
     vec4 bottom;
+    // Bande gardée : band.z <= dot(gl_FragCoord.xy, band.xy) < band.w.
+    vec4 band;
 } pc;
 
 void main() {
+    float u = dot(gl_FragCoord.xy, pc.band.xy);
+    if (u < pc.band.z || u >= pc.band.w) discard;
     // v_uv.y = 0 en bas (fenêtre retournée), 1 en haut.
     float t = clamp(v_uv.y, 0.0, 1.0);
     vec3 c = mix(pc.bottom.rgb, pc.top.rgb, smoothstep(0.0, 1.0, t));

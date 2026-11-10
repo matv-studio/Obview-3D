@@ -7,6 +7,7 @@ mod fbx;
 mod glb;
 pub mod normals;
 mod obj;
+mod progress;
 mod stl;
 
 use std::path::Path;
@@ -14,6 +15,7 @@ use std::path::Path;
 pub use fbx::read_fbx;
 pub use glb::read_glb;
 pub use obj::{parse_obj, read_obj};
+pub use progress::{Progress, Stage};
 pub use stl::{parse_stl, read_stl};
 
 /// Extensions reconnues (minuscules).

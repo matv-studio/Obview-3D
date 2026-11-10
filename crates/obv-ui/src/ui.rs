@@ -149,6 +149,13 @@ pub struct Ui {
     press_pos: Option<Vec2>,
     hover_since: f64,
     anims: HashMap<Id, f32>,
+    /// Éléments montrés : instant d'apparition et dernière image où ils ont été demandés.
+    presence: HashMap<Id, (f64, u64)>,
+    /// Transitions minutées : départ, arrivée, instant du départ.
+    tweens: HashMap<Id, (f32, f32, f64)>,
+    frame_no: u64,
+    /// Animations coupées (réglage d'accessibilité) : transitions instantanées.
+    pub reduce_motion: bool,
     animating: bool,
     dt: f32,
     last_time: f64,
@@ -193,6 +200,10 @@ impl Ui {
             press_pos: None,
             hover_since: 0.0,
             anims: HashMap::new(),
+            presence: HashMap::new(),
+            tweens: HashMap::new(),
+            frame_no: 0,
+            reduce_motion: false,
             animating: false,
             dt: 0.0,
             last_time: 0.0,
@@ -214,6 +225,11 @@ impl Ui {
 
     /// Début d'une image : met à jour survol, clics, défilement d'après la mise en page de l'image précédente.
     pub fn begin_frame(&mut self, input: FrameInput) {
+        self.frame_no += 1;
+        if self.frame_no.is_multiple_of(600) {
+            let f = self.frame_no;
+            self.presence.retain(|_, (_, last)| *last + 600 > f);
+        }
         self.dt = ((input.time - self.last_time) as f32).clamp(0.0, 0.1);
         self.last_time = input.time;
         let pressed = input.buttons[0] && !self.prev_buttons[0];
@@ -529,7 +545,7 @@ impl Ui {
 
     /// Valeur animée vers `target` (lissage exponentiel, ~`ms` millisecondes pour 95 %).
     pub fn anim(&mut self, id: Id, target: f32, ms: f32) -> f32 {
-        let k = if ms <= 0.0 { 1.0 } else { 1.0 - (-3.0 * self.dt * 1000.0 / ms).exp() };
+        let k = if ms <= 0.0 || self.reduce_motion { 1.0 } else { 1.0 - (-3.0 * self.dt * 1000.0 / ms).exp() };
         let v = self.anims.entry(id).or_insert(target);
         *v += (target - *v) * k;
         if (target - *v).abs() < 0.002 {
@@ -538,6 +554,49 @@ impl Ui {
             self.animating = true;
         }
         *v
+    }
+
+    /// Apparition de l'élément `id` (fenêtre, menu, panneau) : 0 à la première image où il est demandé, puis
+    /// 1 au bout de `ms` millisecondes, courbe de décélération (cubique). Repart de 0 s'il n'a pas été
+    /// demandé à l'image précédente.
+    pub fn appear(&mut self, id: Id, ms: f32) -> f32 {
+        let (now, frame) = (self.input.time, self.frame_no);
+        let e = self.presence.entry(id).or_insert((now, frame));
+        if e.1 + 1 < frame {
+            e.0 = now;
+        }
+        e.1 = frame;
+        if self.reduce_motion || ms <= 0.0 {
+            return 1.0;
+        }
+        let t = (((now - e.0) * 1000.0) as f32 / ms).clamp(0.0, 1.0);
+        if t < 1.0 {
+            self.animating = true;
+        }
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    /// Transition minutée vers `target` : `ms` millisecondes, courbe d'accélération puis de décélération
+    /// (cubique). Un changement de cible en cours de route repart de la valeur atteinte. Valeur initiale :
+    /// la première cible (pas de transition).
+    pub fn tween(&mut self, id: Id, target: f32, ms: f32) -> f32 {
+        let now = self.input.time;
+        let ease = |t: f32| if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) * 0.5 };
+        let value = |(from, to, start): (f32, f32, f64)| {
+            let t = if ms <= 0.0 { 1.0 } else { (((now - start) * 1000.0) as f32 / ms).clamp(0.0, 1.0) };
+            (from + (to - from) * ease(t), t < 1.0)
+        };
+        let reduce = self.reduce_motion;
+        let e = self.tweens.entry(id).or_insert((target, target, now));
+        if e.1 != target {
+            let (current, _) = value(*e);
+            *e = (if reduce { target } else { current }, target, now);
+        }
+        let (v, moving) = value(*e);
+        if moving {
+            self.animating = true;
+        }
+        v
     }
 
     /// Demande une autre image (animation continue : indicateur d'attente).
@@ -615,7 +674,8 @@ impl Ui {
             root.paint(&mut p);
             for o in &overlays {
                 if o.kind == Layer::Modal {
-                    p.dl.rect(window, 0.0, p.theme.color.scrim, None);
+                    // Le voile suit le fondu de la fenêtre.
+                    p.dl.rect(window, 0.0, p.theme.color.scrim.mul_alpha(o.node.style.opacity), None);
                 }
                 o.node.paint(&mut p);
             }

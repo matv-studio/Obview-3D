@@ -3,7 +3,7 @@
 
 use obv_render::Camera;
 use obv_ui::{
-    Anchor, Color, Cursor, Edges, Id, Layer, Node, Rect, Size, TextStyle, Ui, Vec2, Weight, controls, vec2,
+    Anchor, Color, Cursor, Edges, Id, Layer, Node, Rect, Size, TextStyle, Ui, Vec2, Weight, controls, i18n, tr, vec2,
     widgets::{self, ButtonKind},
 };
 
@@ -62,7 +62,7 @@ impl CaptureSize {
     pub const ALL: [CaptureSize; 3] = [CaptureSize::View, CaptureSize::Double, CaptureSize::Uhd];
     pub fn label(self) -> &'static str {
         match self {
-            CaptureSize::View => "Vue",
+            CaptureSize::View => tr("Vue"),
             CaptureSize::Double => "2×",
             CaptureSize::Uhd => "4K",
         }
@@ -133,10 +133,12 @@ fn id(name: &str) -> Id {
     Id::new("outils").with(name)
 }
 
-fn panel(ui: &Ui, rows: Vec<Node>) -> Node {
+/// Panneau d'outil flottant ; `appear` (0 → 1) : fondu et glissement de 6 px vers le bas à l'ouverture.
+fn panel(ui: &Ui, appear: f32, rows: Vec<Node>) -> Node {
     let c = &ui.theme.color;
     Node::column()
-        .anchor(Anchor { left: Some(12.0), top: Some(12.0), ..Default::default() })
+        .anchor(Anchor { left: Some(12.0), top: Some(12.0 - (1.0 - appear) * 6.0), ..Default::default() })
+        .opacity(appear)
         .width(Size::Px(264.0))
         .padding(Edges::xy(12.0, 10.0))
         .gap(8.0)
@@ -165,7 +167,8 @@ fn value_row(ui: &Ui, label: &str, value: String) -> Node {
         .child(Node::text(value, TextStyle::new(12.5, Weight::Medium), c.text))
 }
 
-fn segmented(ui: &mut Ui, base: Id, items: &[&str], selected: usize) -> (Node, Option<usize>) {
+/// Choix segmenté : le nœud et l'indice cliqué à cette image.
+pub(crate) fn segmented(ui: &mut Ui, base: Id, items: &[&str], selected: usize) -> (Node, Option<usize>) {
     let mut chosen = None;
     for i in 0..items.len() {
         if ui.clicked(base.with(i)) {
@@ -179,22 +182,23 @@ fn segmented(ui: &mut Ui, base: Id, items: &[&str], selected: usize) -> (Node, O
 pub fn tool_panel(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
     let units = s.settings.units;
     let unit_m = s.unit_m;
+    let appear = ui.appear(id("panneau").with(s.tool as u8), 160.0);
     match s.tool {
         Tool::Measure => {
             if ui.clicked(id("effacer")) {
                 s.measure = MeasureState::default();
             }
-            let mut rows = vec![title(ui, "measure", "Mesurer")];
+            let mut rows = vec![title(ui, "measure", tr("Mesurer"))];
             let last = s.measure.done.last().copied();
             match last {
                 Some([a, b]) => {
                     let d: [f64; 3] = std::array::from_fn(|i| (b.local[i] - a.local[i]).abs() * unit_m);
-                    rows.push(value_row(ui, "Distance", units.format(distance(a.local, b.local) * unit_m)));
+                    rows.push(value_row(ui, tr("Distance"), units.format(distance(a.local, b.local) * unit_m)));
                     for (k, axis) in ["X", "Y", "Z"].iter().enumerate() {
-                        rows.push(value_row(ui, &format!("Écart {axis}"), units.format(d[k])));
+                        rows.push(value_row(ui, &format!("{} {axis}", tr("Écart")), units.format(d[k])));
                     }
                 }
-                None => rows.push(value_row(ui, "Distance", "—".into())),
+                None => rows.push(value_row(ui, tr("Distance"), "—".into())),
             }
             let n = s.measure.done.len();
             rows.push(
@@ -202,7 +206,10 @@ pub fn tool_panel(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
                     .width(Size::Fill(1.0))
                     .child(
                         Node::text(
-                            format!("{n} mesure{}", if n > 1 { "s" } else { "" }),
+                            i18n::pick(
+                                format!("{n} measurement{}", if n == 1 { "" } else { "s" }),
+                                format!("{n} mesure{}", if n > 1 { "s" } else { "" }),
+                            ),
                             TextStyle::new(12.0, Weight::Regular),
                             ui.theme.color.text_tertiary,
                         )
@@ -212,15 +219,15 @@ pub fn tool_panel(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
                         widgets::button(
                             ui,
                             id("effacer"),
-                            "Effacer",
+                            tr("Effacer"),
                             Some("trash"),
                             ButtonKind::Secondary,
-                            "Effacer toutes les mesures (Suppr)",
+                            tr("Effacer toutes les mesures (Suppr)"),
                         )
                         .opacity(if n > 0 || s.measure.pending.is_some() { 1.0 } else { 0.45 }),
                     ),
             );
-            Some(panel(ui, rows))
+            Some(panel(ui, appear, rows))
         }
         Tool::Section => {
             let (axes, picked) = segmented(ui, id("axe"), &["X", "Y", "Z"], s.section.axis);
@@ -244,13 +251,14 @@ pub fn tool_panel(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
             );
             Some(panel(
                 ui,
+                appear,
                 vec![
-                    title(ui, "section", "Coupe"),
+                    title(ui, "section", tr("Coupe")),
                     axis_row,
                     slider.width(Size::Fill(1.0)),
                     value_row(
                         ui,
-                        ["Position X", "Position Y", "Position Z"][s.section.axis.min(2)],
+                        tr(["Position X", "Position Y", "Position Z"][s.section.axis.min(2)]),
                         pos.map(|m| units.format(m)).unwrap_or_default(),
                     ),
                 ],
@@ -264,10 +272,11 @@ pub fn tool_panel(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
             }
             Some(panel(
                 ui,
+                appear,
                 vec![
-                    title(ui, "explode", "Vue éclatée"),
+                    title(ui, "explode", tr("Vue éclatée")),
                     slider.width(Size::Fill(1.0)),
-                    value_row(ui, "Écartement", format!("{:.0} %", s.explode * 100.0)),
+                    value_row(ui, tr("Écartement"), i18n::with_unit(&format!("{:.0}", s.explode * 100.0), "%")),
                 ],
             ))
         }
@@ -292,7 +301,7 @@ pub fn capture_popup(ui: &mut Ui, s: &mut AppState, anchor: Option<Rect>) {
     if let Some(i) = picked {
         s.capture.size = CaptureSize::ALL[i];
     }
-    let (bg_seg, picked) = segmented(ui, id("fond"), &["Fond", "Transparent"], s.capture.transparent as usize);
+    let (bg_seg, picked) = segmented(ui, id("fond"), &[tr("Fond"), tr("Transparent")], s.capture.transparent as usize);
     if let Some(i) = picked {
         s.capture.transparent = i == 1;
     }
@@ -311,12 +320,15 @@ pub fn capture_popup(ui: &mut Ui, s: &mut AppState, anchor: Option<Rect>) {
     };
     let w = 270.0;
     let h = 32.0 * 2.0 + 28.0 + 12.0 + 20.0;
+    // Apparition 120 ms : fondu et glissement de 4 px depuis le bouton (en dessous).
+    let appear = ui.appear(id("menu"), 120.0);
     let menu = Node::column()
         .anchor(Anchor {
             left: Some((r.center().x - w * 0.5).max(8.0)),
-            top: Some(r.min.y - 10.0 - h),
+            top: Some(r.min.y - 10.0 - h + (1.0 - appear) * 4.0),
             ..Default::default()
         })
+        .opacity(appear)
         .width(Size::Px(w))
         .padding(Edges::xy(12.0, 10.0))
         .gap(4.0)
@@ -324,11 +336,11 @@ pub fn capture_popup(ui: &mut Ui, s: &mut AppState, anchor: Option<Rect>) {
         .bg(c.raised)
         .border(1.0, c.border_strong)
         .shadow(40.0, vec2(0.0, 16.0), c.shadow)
-        .child(row("Taille", size_seg))
-        .child(row("Arrière-plan", bg_seg))
+        .child(row(tr("Taille"), size_seg))
+        .child(row(tr("Arrière-plan"), bg_seg))
         .child(Node::new().height(Size::Px(4.0)))
         .child(
-            widgets::button(ui, save, "Enregistrer l'image", Some("capture"), ButtonKind::Primary, "PNG")
+            widgets::button(ui, save, tr("Enregistrer l'image"), Some("capture"), ButtonKind::Primary, "PNG")
                 .width(Size::Fill(1.0)),
         );
     ui.overlay(Node::stack().child(menu), Layer::Popup);
@@ -468,7 +480,7 @@ pub fn overlay(ui: &mut Ui, s: &AppState) -> Option<Node> {
                 })
                 .id(handle_id)
                 .cursor(Cursor::Grab)
-                .tooltip("Glisser pour déplacer le plan")
+                .tooltip(tr("Glisser pour déplacer le plan"))
                 .size(Size::Px(size), Size::Px(size))
                 .anchor(Anchor {
                     left: Some(q.x - view.min.x - size * 0.5),

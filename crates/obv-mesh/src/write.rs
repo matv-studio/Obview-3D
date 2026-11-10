@@ -30,12 +30,30 @@ impl Format {
     }
 }
 
+/// Compression du GLB (D-29).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Compression {
+    /// Flottants : lisible partout.
+    None,
+    /// Attributs quantifiés (`KHR_mesh_quantization`) : environ deux fois plus léger, lu par Blender, Unity,
+    /// Unreal, three.js, Babylon.js.
+    #[default]
+    Quantize,
+    /// Quantification et codec meshoptimizer (`EXT_meshopt_compression`, exigée) : le plus léger et le plus rapide
+    /// à décoder, pour le web (three.js, Babylon.js) ; Blender ne la lit pas.
+    Meshopt,
+}
+
+impl Compression {
+    pub const ALL: [Compression; 3] = [Compression::None, Compression::Quantize, Compression::Meshopt];
+}
+
 /// Options d'écriture.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WriteOptions {
     pub format: Format,
-    /// GLB : quantification (`KHR_mesh_quantization`) et compression meshoptimizer (`EXT_meshopt_compression`).
-    pub compress: bool,
+    /// GLB : compression des géométries.
+    pub compression: Compression,
     /// Écart accepté (unités du modèle) : borne la quantification des positions (0 : positions en flottants).
     pub tolerance: f32,
 }
@@ -162,7 +180,9 @@ impl Bin {
 fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
     use serde_json::{Value, json};
     let to_m = model.unit_m as f32;
-    if opts.compress {
+    let meshopt_on = opts.compression == Compression::Meshopt;
+    let quant_on = opts.compression != Compression::None;
+    if meshopt_on {
         unsafe {
             // SAFETY: réglage global de version, sans effet sur la mémoire. Version 0 du codec de sommets : celle
             // de `EXT_meshopt_compression` (la version 1 relève de `KHR_meshopt_compression`).
@@ -170,7 +190,7 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
             meshopt::ffi::meshopt_encodeIndexVersion(1);
         }
     }
-    let mut bin = Bin { data: Vec::new(), views: Vec::new(), compress: opts.compress, fallback_len: 0 };
+    let mut bin = Bin { data: Vec::new(), views: Vec::new(), compress: meshopt_on, fallback_len: 0 };
     let (mut accessors, mut meshes, mut nodes) = (Vec::<Value>::new(), Vec::<Value>::new(), Vec::<Value>::new());
     let mut used_quantization = false;
 
@@ -246,7 +266,7 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         // seulement si le pas reste sous le quart de l'écart accepté.
         let extent = (0..3).map(|i| hi[i] - lo[i]).fold(0.0f32, f32::max).max(1e-12);
         let step = extent / 65535.0;
-        let quantize = opts.compress && opts.tolerance > 0.0 && step <= opts.tolerance * to_m * 0.25;
+        let quantize = quant_on && opts.tolerance > 0.0 && step <= opts.tolerance * to_m * 0.25;
         let mut node = json!({"name": part.name, "mesh": meshes.len()});
         let pos_acc = if quantize {
             used_quantization = true;
@@ -269,13 +289,27 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         };
         accessors.push(pos_acc);
         let pos_i = accessors.len() - 1;
-        // Normales : octaédriques sur 8 bits (filtre meshoptimizer) si compressé, sinon flottants.
-        let nrm_acc = if opts.compress {
+        // Normales : octaédriques sur 8 bits (filtre meshoptimizer) avec meshopt, entiers signés normalisés sur
+        // 8 bits en quantification seule, sinon flottants.
+        let nrm_acc = if meshopt_on {
             used_quantization = true;
             let n4: Vec<[f32; 4]> = m.normals.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
             let enc: Vec<[i8; 4]> = meshopt::encode_filter_oct(&n4, 8);
             let raw: Vec<u8> = enc.iter().flatten().map(|b| *b as u8).collect();
             let v = bin.attributes(&raw, 4, n, "OCTAHEDRAL");
+            json!({"bufferView": v, "componentType": 5120, "normalized": true, "count": n, "type": "VEC3"})
+        } else if quant_on {
+            used_quantization = true;
+            let raw: Vec<u8> = m
+                .normals
+                .iter()
+                .flat_map(|v| {
+                    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-12);
+                    let c = |x: f32| ((x / l) * 127.0).round().clamp(-127.0, 127.0) as i8 as u8;
+                    [c(v[0]), c(v[1]), c(v[2]), 0]
+                })
+                .collect();
+            let v = bin.attributes(&raw, 4, n, "NONE");
             json!({"bufferView": v, "componentType": 5120, "normalized": true, "count": n, "type": "VEC3"})
         } else {
             let raw: Vec<u8> = m.normals.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
@@ -286,7 +320,7 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         let nrm_i = accessors.len() - 1;
         let uv_i = if m.uvs.len() == n {
             let in_unit = m.uvs.iter().flatten().all(|v| (0.0..=1.0).contains(v));
-            let acc = if opts.compress && in_unit {
+            let acc = if quant_on && in_unit {
                 used_quantization = true;
                 let raw: Vec<u8> = m
                     .uvs
@@ -324,7 +358,7 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         nodes.push(node);
     }
     let mut ext_used: Vec<&str> = Vec::new();
-    if opts.compress {
+    if meshopt_on {
         ext_used.push("EXT_meshopt_compression");
     }
     if used_quantization {
@@ -334,7 +368,7 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         ext_used.push("EXT_texture_webp");
     }
     let mut buffers = vec![json!({"byteLength": 0})];
-    if opts.compress {
+    if meshopt_on {
         buffers.push(json!({"byteLength": bin.fallback_len.max(4),
             "extensions": {"EXT_meshopt_compression": {"fallback": true}}}));
     }
@@ -882,11 +916,24 @@ mod tests {
 
     #[test]
     fn glb_relu_avec_et_sans_compression() {
-        for compress in [false, true] {
-            let opts = WriteOptions { format: Format::Glb, compress, tolerance: 0.01 };
-            let p = write_all(encode(&model(), opts, if compress { "c" } else { "a" }));
+        for compression in Compression::ALL {
+            let opts = WriteOptions { format: Format::Glb, compression, tolerance: 0.01 };
+            let p = write_all(encode(&model(), opts, &format!("{compression:?}")));
             let m = obv_io::read_glb(&p).unwrap();
             check(&m, 0.001);
+            // Seul meshopt exige une extension que Blender ignore ; la quantification reste lisible partout.
+            let bytes = std::fs::read(&p).unwrap();
+            let len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+            let doc: serde_json::Value = serde_json::from_slice(&bytes[20..20 + len]).unwrap();
+            let required: Vec<&str> = doc["extensionsRequired"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            match compression {
+                Compression::None => assert!(required.is_empty(), "{required:?}"),
+                Compression::Quantize => assert_eq!(required, ["KHR_mesh_quantization"]),
+                Compression::Meshopt => assert!(required.contains(&"EXT_meshopt_compression")),
+            }
             // Positions quantifiées : à moins d'un pas (10 mm / 65535) près.
             let mesh = &m.parts[0].mesh;
             assert!(mesh.positions.iter().any(|q| (q[0] - 0.01).abs() < 1e-6), "{:?}", mesh.positions);
@@ -895,14 +942,22 @@ mod tests {
 
     #[test]
     fn obj_relu() {
-        let p = write_all(encode(&model(), WriteOptions { format: Format::Obj, compress: false, tolerance: 0.0 }, "o"));
+        let p = write_all(encode(
+            &model(),
+            WriteOptions { format: Format::Obj, compression: Compression::None, tolerance: 0.0 },
+            "o",
+        ));
         let m = obv_io::read_obj(&p).unwrap();
         check(&m, 1.0);
     }
 
     #[test]
     fn fbx_relu_par_ufbx() {
-        let p = write_all(encode(&model(), WriteOptions { format: Format::Fbx, compress: false, tolerance: 0.0 }, "f"));
+        let p = write_all(encode(
+            &model(),
+            WriteOptions { format: Format::Fbx, compression: Compression::None, tolerance: 0.0 },
+            "f",
+        ));
         let m = obv_io::read_fbx(&p).unwrap();
         check(&m, 0.001);
         let mesh = &m.parts[0].mesh;

@@ -96,8 +96,12 @@ pub fn select(ui: &mut Ui, id: Id, options: &[&str], selected: usize, width: f32
         let h = options.len() as f32 * item_h + 8.0;
         let below = r.max.y + 4.0 + h <= ui.input.size.y - 8.0;
         let top = if below { r.max.y + 4.0 } else { r.min.y - 4.0 - h };
+        // Apparition 120 ms : fondu et glissement de 4 px depuis le déclencheur.
+        let appear = ui.appear(id.with("menu"), 120.0);
+        let shift = (1.0 - appear) * if below { -4.0 } else { 4.0 };
         let mut menu = Node::column()
-            .anchor(Anchor { left: Some(r.min.x), top: Some(top), ..Default::default() })
+            .anchor(Anchor { left: Some(r.min.x), top: Some(top + shift), ..Default::default() })
+            .opacity(appear)
             .width(Size::Px(r.width().clamp(220.0, 320.0)))
             .padding(Edges::all(4.0))
             .radius(ui.theme.size.radius_panel)
@@ -370,7 +374,7 @@ pub fn text_input(ui: &mut Ui, cfg: TextInput<'_>, text: &mut String) -> (Node, 
         n = n.child(
             Node::stack()
                 .id(cid)
-                .tooltip("Effacer")
+                .tooltip(crate::tr("Effacer"))
                 .size(Size::Px(18.0), Size::Px(18.0))
                 .radius(9.0)
                 .child(Node::icon("close", 14.0, cc)),
@@ -387,7 +391,7 @@ pub fn modal(ui: &mut Ui, id: Id, title: &str, size: (f32, f32), body: Node, foo
     let m = ui.theme.size.clone();
     let close_id = id.with("fermer");
     let close = ui.clicked(close_id) || ui.escape_pressed();
-    let appear = ui.anim(id.with("apparition"), 1.0, 200.0);
+    let appear = ui.appear(id.with("apparition"), 200.0);
     let hover = ui.anim(close_id.with("survol"), if ui.hovered(close_id) { 1.0 } else { 0.0 }, 120.0);
     let header = Node::row()
         .height(Size::Px(52.0))
@@ -397,7 +401,7 @@ pub fn modal(ui: &mut Ui, id: Id, title: &str, size: (f32, f32), body: Node, foo
         .child(
             Node::stack()
                 .id(close_id)
-                .tooltip_shortcut("Fermer", "Échap")
+                .tooltip_shortcut(crate::tr("Fermer"), crate::tr("Échap"))
                 .size(Size::Px(m.control_height), Size::Px(m.control_height))
                 .radius(m.radius_control)
                 .bg(Color::TRANSPARENT.mix(c.raised_hover, hover))

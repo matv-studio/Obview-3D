@@ -7,7 +7,7 @@ use obv_render::Camera;
 use obv_ui::{
     Align, Anchor, Color, Cursor, Edges, Id, Justify, Key, Node, Rect, Size, TextStyle, Theme, ThemeKind, Ui, Weight,
     controls::{self, TextInput},
-    vec2,
+    i18n, tr, vec2,
     widgets::{self, ButtonKind, TreeRow},
 };
 
@@ -70,12 +70,18 @@ pub struct AppState {
     pub right_open: bool,
     /// Vues de rendu (D-15).
     pub inspector: Inspector,
+    /// Limites animées entre la vue normale et les bandes des rendus (fractions de la largeur de la vue).
+    pub inspector_cuts: [f32; inspector::CUTS],
     /// Fenêtre de conversion.
     pub convert: ConvertState,
     /// Demandes à traiter par la fenêtre de l'application (fichiers, fils de travail).
     pub requests: Vec<Request>,
-    /// Fichier en cours de lecture (nom affiché).
-    pub loading: Option<String>,
+    /// Lecture en cours (nom, étape, avancement).
+    pub loading: Option<crate::loading::Loading>,
+    /// Un fichier est glissé au-dessus de la fenêtre.
+    pub drop_hover: bool,
+    /// Avis d'échec affiché en haut de la vue.
+    pub notice: Option<crate::loading::Notice>,
     /// Boîte englobante du modèle (unités du fichier).
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
     /// Rectangle de la vue 3D après la dernière mise en page (pixels logiques).
@@ -109,7 +115,7 @@ impl AppState {
                     .iter()
                     .find_map(|g| g.material)
                     .and_then(|m| model.materials.get(m as usize))
-                    .map(|m| if m.name.is_empty() { "Sans nom".to_owned() } else { m.name.clone() });
+                    .map(|m| m.name.clone());
                 let b = p.mesh.bounds();
                 let size = b.map(|(lo, hi)| [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]).unwrap_or([0.0; 3]);
                 let center = b.map(|(lo, hi)| std::array::from_fn(|k| (lo[k] + hi[k]) * 0.5)).unwrap_or([0.0; 3]);
@@ -142,12 +148,15 @@ impl AppState {
             search: String::new(),
             camera: Camera::default(),
             inspector: Inspector::Off,
+            inspector_cuts: inspector::target_cuts(Inspector::Off),
             left_open: false,
             right_open: false,
             scene_bounds: model.bounds(),
             convert: ConvertState::default(),
             requests: Vec::new(),
             loading: None,
+            drop_hover: false,
+            notice: None,
             viewport: Rc::new(Cell::new(Rect::ZERO)),
             stage: Rc::new(Cell::new(Rect::ZERO)),
             grip_press: None,
@@ -179,22 +188,14 @@ impl AppState {
 pub fn compact(n: usize) -> String {
     match n {
         0..=9_999 => group(n),
-        10_000..=999_999 => format!("{} k", (n as f64 / 1000.0).round()),
-        _ => format!("{:.1} M", n as f64 / 1e6).replace('.', ","),
+        10_000..=999_999 => i18n::with_unit(&format!("{}", (n as f64 / 1000.0).round()), "k"),
+        _ => i18n::with_unit(&i18n::decimal(n as f64 / 1e6, 1), "M"),
     }
 }
 
-/// Séparateur des milliers à la française (espace fine insécable).
+/// Entier groupé par milliers selon la langue.
 pub fn group(n: usize) -> String {
-    let s = n.to_string();
-    let mut out = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push('\u{202f}');
-        }
-        out.push(ch);
-    }
-    out
+    i18n::group(n as u64)
 }
 
 fn length(v: f32, unit_m: f64, units: Units) -> String {
@@ -225,7 +226,7 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     ));
     let file = Node::row()
         .id(Id::new("fichier"))
-        .tooltip_shortcut("Ouvrir un fichier", "Ctrl O")
+        .tooltip_shortcut(tr("Ouvrir un fichier"), "Ctrl O")
         .gap(6.0)
         .padding(Edges::xy(8.0, 0.0))
         .height(Size::Px(28.0))
@@ -236,20 +237,22 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
             None => Node::icon("file", 15.0, c.text_secondary),
         })
         .child(Node::text(
-            s.loading.as_deref().unwrap_or(&s.file_name),
+            s.loading.as_ref().map(|l| l.name.as_str()).unwrap_or(&s.file_name),
             TextStyle::new(m.font_size, Weight::Medium),
             c.text,
         ))
         .child(Node::icon("chevron-down", 13.0, c.text_tertiary));
+    // Sans document ouvert (ni lecture en cours), la vue vide porte l'ouverture : pas de nom à montrer.
+    let has_doc = !s.parts.is_empty() || s.loading.is_some();
     let left = Node::row()
         .gap(10.0)
         .child(logo)
         .child(Node::text("Obview", TextStyle::new(m.font_size, Weight::SemiBold), c.text))
-        .child(Node::new().size(Size::Px(1.0), Size::Px(18.0)).bg(c.border))
-        .child(file);
+        .children(has_doc.then(|| Node::new().size(Size::Px(1.0), Size::Px(18.0)).bg(c.border)))
+        .children(has_doc.then_some(file));
     let dark = s.theme_kind() == ThemeKind::Dark;
     let theme_icon = if dark { "sun" } else { "moon" };
-    let theme_tip = if dark { "Thème clair" } else { "Thème sombre" };
+    let theme_tip = tr(if dark { "Thème clair" } else { "Thème sombre" });
     let right = Node::row()
         .gap(6.0)
         .child(
@@ -257,19 +260,23 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
                 .size(Size::Px(28.0), Size::Px(28.0)),
         )
         .child(
-            widgets::small_icon_button(ui, Id::new("réglages"), "settings", "Réglages", c.icon)
-                .tooltip_shortcut("Réglages", "Ctrl ,")
+            widgets::small_icon_button(ui, Id::new("réglages"), "settings", tr("Réglages"), c.icon)
+                .tooltip_shortcut(tr("Réglages"), "Ctrl ,")
                 .size(Size::Px(28.0), Size::Px(28.0)),
         )
         .child(Node::new().size(Size::Px(4.0), Size::Px(1.0)))
-        .child(widgets::button(
-            ui,
-            Id::new("convertir"),
-            "Convertir",
-            Some("convert"),
-            ButtonKind::Primary,
-            "Convertir en maillage optimisé (GLB, OBJ, FBX)",
-        ));
+        .child(
+            widgets::button(
+                ui,
+                Id::new("convertir"),
+                tr("Convertir"),
+                Some("convert"),
+                ButtonKind::Primary,
+                tr("Convertir en maillage optimisé (GLB, OBJ, FBX)"),
+            )
+            // Rien à convertir sans modèle.
+            .opacity(if s.parts.is_empty() { 0.4 } else { 1.0 }),
+        );
     Node::row()
         .height(Size::Px(m.topbar_height))
         .width(Size::Fill(1.0))
@@ -283,7 +290,7 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
 fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
     let c = ui.theme.color.clone();
     if s.left_tab == 1 {
-        let tabs = widgets::tabs(ui, Id::new("onglets"), &["Pièces", "Vues"], s.left_tab);
+        let tabs = widgets::tabs(ui, Id::new("onglets"), &[tr("Pièces"), tr("Vues")], s.left_tab);
         let header = Node::column().padding(Edges { left: 8.0, right: 8.0, top: 10.0, bottom: 6.0 }).child(tabs);
         let body = Node::scroll(Id::new("vues défilement"))
             .width(Size::Fill(1.0))
@@ -318,6 +325,7 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         let i = filtered[k - 1];
         let p = &s.parts[i];
         let detail = compact(p.triangles);
+        let name = crate::lang::part_name(&p.name);
         list.push(widgets::tree_row(
             ui,
             TreeRow {
@@ -325,7 +333,7 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
                 depth: 1,
                 expanded: None,
                 icon: "part",
-                label: &p.name,
+                label: &name,
                 detail: Some(&detail),
                 selected: s.selected == Some(i),
                 visible: p.visible,
@@ -333,12 +341,12 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         ));
     }
     list.push(Node::new().height(Size::Px(after)));
-    let tabs = widgets::tabs(ui, Id::new("onglets"), &["Pièces", "Vues"], s.left_tab);
+    let tabs = widgets::tabs(ui, Id::new("onglets"), &[tr("Pièces"), tr("Vues")], s.left_tab);
     let (search, changed) = controls::text_input(
         ui,
         TextInput {
             id: Id::new("recherche"),
-            placeholder: "Rechercher",
+            placeholder: tr("Rechercher"),
             width: Size::Fill(1.0),
             icon: Some("search"),
             hint: Some("Ctrl F"),
@@ -356,9 +364,15 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         .child(tabs)
         .child(search);
     let shown = if s.search.trim().is_empty() {
-        format!("{} pièces · {} triangles", group(s.parts.len()), compact(s.total_triangles()))
+        i18n::pick(
+            format!("{} parts · {} triangles", group(s.parts.len()), compact(s.total_triangles())),
+            format!("{} pièces · {} triangles", group(s.parts.len()), compact(s.total_triangles())),
+        )
     } else {
-        format!("{} sur {} pièces", group(filtered.len()), group(s.parts.len()))
+        i18n::pick(
+            format!("{} of {} parts", group(filtered.len()), group(s.parts.len())),
+            format!("{} sur {} pièces", group(filtered.len()), group(s.parts.len())),
+        )
     };
     let footer = Node::row()
         .height(Size::Px(32.0))
@@ -393,32 +407,37 @@ fn properties_panel(ui: &mut Ui, s: &AppState) -> Node {
                             .child(Node::icon("part", 15.0, c.accent)),
                     )
                     .child(
-                        Node::text(&p.name, TextStyle::new(13.5, Weight::SemiBold), c.text)
+                        Node::text(crate::lang::part_name(&p.name), TextStyle::new(13.5, Weight::SemiBold), c.text)
                             .width(Size::Fill(1.0))
                             .truncate(),
                     )
-                    .child(widgets::small_icon_button(ui, Id::new("cadrer pièce"), "frame", "Cadrer la pièce", c.icon)),
+                    .child(widgets::small_icon_button(ui, Id::new("cadrer pièce"), "frame", tr("Focus"), c.icon)),
             );
             col.push(widgets::divider(ui));
-            col.push(widgets::section_header(ui, "Géométrie"));
-            col.push(widgets::property_row(ui, "Triangles", group(p.triangles)));
-            col.push(widgets::property_row(ui, "Sommets", group(p.vertices)));
-            col.push(widgets::property_row(ui, "Largeur", length(p.size[0], s.unit_m, units)));
-            col.push(widgets::property_row(ui, "Hauteur", length(p.size[1], s.unit_m, units)));
-            col.push(widgets::property_row(ui, "Profondeur", length(p.size[2], s.unit_m, units)));
+            col.push(widgets::section_header(ui, tr("Géométrie")));
+            col.push(widgets::property_row(ui, tr("Triangles"), group(p.triangles)));
+            col.push(widgets::property_row(ui, tr("Sommets"), group(p.vertices)));
+            col.push(widgets::property_row(ui, tr("Largeur"), length(p.size[0], s.unit_m, units)));
+            col.push(widgets::property_row(ui, tr("Hauteur"), length(p.size[1], s.unit_m, units)));
+            col.push(widgets::property_row(ui, tr("Profondeur"), length(p.size[2], s.unit_m, units)));
             col.push(Node::new().height(Size::Px(8.0)));
             col.push(widgets::divider(ui));
-            col.push(widgets::section_header(ui, "Apparence"));
+            col.push(widgets::section_header(ui, tr("Apparence")));
             let [r, g, b, _] = p.color;
             let hex = format!("#{r:02X}{g:02X}{b:02X}");
-            col.push(widgets::color_property(ui, "Couleur", Color::hex(u32::from_be_bytes([0, r, g, b])), &hex));
-            col.push(widgets::property_row(ui, "Matériau", p.material.as_deref().unwrap_or("Par défaut")));
+            col.push(widgets::color_property(ui, tr("Couleur"), Color::hex(u32::from_be_bytes([0, r, g, b])), &hex));
+            let material = match p.material.as_deref() {
+                None => tr("Par défaut").into(),
+                Some("") => tr("Sans nom").into(),
+                Some(n) => crate::lang::part_name(n),
+            };
+            col.push(widgets::property_row(ui, tr("Matériau"), material));
         }
         None => {
-            col.push(widgets::section_header(ui, "Modèle"));
-            col.push(widgets::property_row(ui, "Fichier", &s.file_name));
-            col.push(widgets::property_row(ui, "Pièces", group(s.parts.len())));
-            col.push(widgets::property_row(ui, "Triangles", group(s.total_triangles())));
+            col.push(widgets::section_header(ui, tr("Modèle")));
+            col.push(widgets::property_row(ui, tr("Fichier"), &s.file_name));
+            col.push(widgets::property_row(ui, tr("Pièces"), group(s.parts.len())));
+            col.push(widgets::property_row(ui, tr("Triangles"), group(s.total_triangles())));
         }
     }
     col
@@ -440,6 +459,10 @@ pub fn tool_button_id(b: ToolButton) -> Id {
 
 /// Barre du bas : boutons choisis dans les réglages, séparateur entre deux groupes (D-25).
 fn toolbar(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
+    // Sans modèle, les outils n'ont rien sur quoi agir.
+    if s.parts.is_empty() {
+        return None;
+    }
     let mut items = Vec::new();
     let mut last_group = None;
     for b in ToolButton::ALL {
@@ -467,12 +490,11 @@ fn toolbar(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
 
 /// Poignée d'un panneau latéral (0 : gauche, 1 : droite) : clic pour afficher ou masquer, glisser pour régler
 /// la largeur (200 à 520 px, charte). Posée sur le bord du plateau ou du panneau ouvert.
-fn grip(ui: &mut Ui, s: &AppState, side: u8) -> Node {
+/// `edge` : largeur affichée du panneau (animée à l'ouverture et à la fermeture).
+fn grip(ui: &mut Ui, side: u8, edge: f32) -> Node {
     let id = grip_id(side);
     let c = ui.theme.color.clone();
-    let open = if side == 0 { s.left_open } else { s.right_open };
-    let width = if side == 0 { s.settings.left_width } else { s.settings.right_width };
-    let edge = if open { width } else { 0.0 };
+    let open = edge > 0.5;
     let t = ui.anim(id.with("survol"), if ui.hovered(id) || ui.is_active(id) { 1.0 } else { 0.0 }, 120.0);
     // Zone sensible de 10 px : 3 px vers l'extérieur, 7 px vers la vue.
     let (hit_w, out) = (10.0, 3.0);
@@ -500,7 +522,7 @@ fn grip(ui: &mut Ui, s: &AppState, side: u8) -> Node {
     })
     .id(id)
     .cursor(Cursor::ResizeHorizontal)
-    .tooltip_shortcut(if side == 0 { "Pièces" } else { "Propriétés" }, if side == 0 { "Ctrl [" } else { "Ctrl ]" })
+    .tooltip_shortcut(tr(if side == 0 { "Pièces" } else { "Propriétés" }), if side == 0 { "Ctrl [" } else { "Ctrl ]" })
     .width(Size::Px(hit_w))
     .height(Size::Fill(1.0));
     let a = if side == 0 {
@@ -527,8 +549,18 @@ fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
     if let Some(p) = tools::tool_panel(ui, s) {
         root.push(p);
     }
+    if let Some(z) = crate::loading::empty(ui, s) {
+        root.push(z);
+    }
+    if let Some(card) = crate::loading::card(ui, s) {
+        root.push(card);
+    }
+    if let Some(n) = crate::loading::notice(ui, s) {
+        root.push(n);
+    }
     let style = s.settings.gizmo;
-    if style != GizmoStyle::None {
+    // Sans modèle : rien à orienter.
+    if style != GizmoStyle::None && !s.parts.is_empty() {
         let (yaw, pitch) = (s.camera.yaw as f32, s.camera.pitch as f32);
         let theme = ui.theme.clone();
         let gid = Id::new("gizmo");
@@ -542,7 +574,7 @@ fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
             Node::custom(move |p, r| gizmo::paint(style, p, r, yaw, pitch, hover, active, &theme))
                 .id(gid)
                 .cursor(if hover.is_some() { Cursor::Default } else { Cursor::Grab })
-                .tooltip(hover.map(gizmo::name).unwrap_or_else(|| "Orienter la vue".into()))
+                .tooltip(hover.map(gizmo::name).unwrap_or_else(|| tr("Orienter la vue").into()))
                 .size(Size::Px(side), Size::Px(side))
                 .anchor(Anchor { top: Some(12.0), right: Some(12.0), ..Default::default() }),
         );
@@ -555,16 +587,39 @@ fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
 /// Charte des apps : cadre (`app_bg`) avec la barre du haut, puis un plateau unique aux coins arrondis
 /// (marge 6 px, contour `stage_line`) qui contient les panneaux et la vue 3D.
 pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
+    // Langue et animations d'après les réglages, avant tout texte.
+    crate::lang::init();
+    i18n::set_lang(s.settings.language.lang());
+    ui.reduce_motion = !s.settings.animations;
     let m = ui.theme.size.clone();
     let c = ui.theme.color.clone();
-    let (lw, rw) = (s.settings.left_width, s.settings.right_width);
+    // Vues de rendu : les bandes entrent depuis la droite, un rendu choisi s'élargit à toute la vue (350 ms).
+    let target = inspector::target_cuts(s.inspector);
+    for (k, t) in target.iter().enumerate() {
+        s.inspector_cuts[k] = ui.tween(Id::new("inspecteur limite").with(k), *t, 350.0);
+    }
+    // Panneaux latéraux : ouverture et fermeture en glissement (200 ms), contenu à pleine largeur découpé.
+    let lo = ui.tween(Id::new("panneau gauche"), if s.left_open { 1.0 } else { 0.0 }, 200.0);
+    let ro = ui.tween(Id::new("panneau droit"), if s.right_open { 1.0 } else { 0.0 }, 200.0);
+    let (lw, rw) = ((s.settings.left_width * lo).round(), (s.settings.right_width * ro).round());
+    let slide = |panel: Node, w: f32, left: bool| {
+        let a = if left {
+            Anchor { right: Some(0.0), top: Some(0.0), ..Default::default() }
+        } else {
+            Anchor { left: Some(0.0), top: Some(0.0), ..Default::default() }
+        };
+        Node::stack().width(Size::Px(w)).height(Size::Fill(1.0)).clip().child(panel.anchor(a))
+    };
+    let left = (lw >= 1.0).then(|| parts_panel(ui, s)).map(|p| slide(p, lw, true));
+    let view = viewport(ui, s);
+    let right = (rw >= 1.0).then(|| properties_panel(ui, s)).map(|p| slide(p, rw, false));
     let body = Node::row()
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
         .align(Align::Stretch)
-        .children(s.left_open.then(|| parts_panel(ui, s)))
-        .child(viewport(ui, s))
-        .children(s.right_open.then(|| properties_panel(ui, s)));
+        .children(left)
+        .child(view)
+        .children(right);
     let (radius, margin) = (m.radius_stage, m.stage_margin);
     // La vue 3D est dessinée avant l'interface : un anneau couleur du cadre recouvre ce qui dépasse des
     // coins arrondis, puis le contour du plateau est tracé par-dessus.
@@ -580,14 +635,19 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     let lane = Node::row()
         .fill()
         .align(Align::Stretch)
-        .children(s.left_open.then(|| spacer(lw)))
+        .children((lw >= 1.0).then(|| spacer(lw)))
         .child(Node::stack().fill().children(toolbar(ui, s)))
-        .children(s.right_open.then(|| spacer(rw)));
-    let overlay = Node::stack().fill().child(lane).child(grip(ui, s, 0)).child(grip(ui, s, 1));
+        .children((rw >= 1.0).then(|| spacer(rw)));
+    let overlay = Node::stack()
+        .fill()
+        .child(lane)
+        .children((!s.parts.is_empty()).then(|| [grip(ui, 0, lw), grip(ui, 1, rw)]).into_iter().flatten());
     let stage = Node::stack().fill().child(body).child(frame).child(overlay);
-    let root = Node::column().fill().child(topbar(ui, s)).child(
+    let column = Node::column().fill().child(topbar(ui, s)).child(
         Node::stack().fill().padding(Edges { left: margin, right: margin, top: 0.0, bottom: margin }).child(stage),
     );
+    // Activité longue : ligne de 2 px en haut de la fenêtre (charte).
+    let root = Node::stack().fill().child(column).children(crate::loading::top_line(ui, s));
     settings_ui::dialog(ui, s);
     convert_ui::dialog(ui, s);
     root
@@ -646,6 +706,8 @@ fn handle_grips(ui: &mut Ui, s: &mut AppState) {
 
 /// Applique les clics et raccourcis de l'image.
 pub fn handle(ui: &mut Ui, s: &mut AppState) {
+    crate::lang::init();
+    i18n::set_lang(s.settings.language.lang());
     if ui.clicked(Id::new("thème")) {
         s.settings.theme = if s.theme_kind() == ThemeKind::Dark { ThemeChoice::Light } else { ThemeChoice::Dark };
         s.settings_dirty = true;
@@ -665,7 +727,7 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
         s.left_open = open;
         s.right_open = open;
     }
-    if ui.clicked(Id::new("convertir")) {
+    if ui.clicked(Id::new("convertir")) && !s.parts.is_empty() {
         s.convert.open = true;
         if !matches!(s.convert.status, convert_ui::Status::Running(_)) {
             s.convert.status = convert_ui::Status::Idle;
@@ -682,12 +744,22 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
         ui.focus(Id::new("recherche"));
     }
     let plain = !ctrl && !ui.text_focused() && !s.settings_open && !s.convert.open;
+    // Vues de rendu : R (ou le bouton) affiche toutes les vues ; depuis une vue isolée, il réaffiche le menu ;
+    // depuis le menu, il le referme.
     if ui.clicked(Id::new("rendu")) || (plain && ui.input.keys.contains(&Key::Char('r'))) {
-        s.inspector = if s.inspector == Inspector::Off { Inspector::Bands } else { Inspector::Off };
+        s.inspector = match s.inspector {
+            Inspector::Bands => Inspector::Off,
+            _ => Inspector::Bands,
+        };
+    }
+    // Échap pendant une lecture l'annule, avant tout autre usage.
+    let cancel_open = s.loading.is_some() && !s.settings_open && !s.convert.open && ui.escape_pressed();
+    if cancel_open {
+        s.requests.push(Request::CancelOpen);
     }
     if ui.clicked(Id::new("inspecteur retour")) {
         s.inspector = Inspector::Bands;
-    } else if !s.settings_open && ui.escape_pressed() {
+    } else if !cancel_open && !s.settings_open && ui.escape_pressed() {
         s.inspector = match s.inspector {
             Inspector::Single(_) => Inspector::Bands,
             _ => Inspector::Off,
@@ -699,19 +771,21 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     }
     if plain && ui.input.keys.contains(&Key::Escape) && s.measure.pending.is_some() {
         s.measure.pending = None;
-    } else if plain && ui.escape_pressed() && s.tool != Tool::Select && s.inspector == Inspector::Off {
+    } else if plain && !cancel_open && ui.escape_pressed() && s.tool != Tool::Select && s.inspector == Inspector::Off {
         s.tool = Tool::Select;
     }
+    // Un outil déjà actif, recliqué (ou sa touche), rend la main à la sélection.
+    let mut pick_tool = |t: Tool| s.tool = if s.tool == t { Tool::Select } else { t };
     if plain {
         for (k, t) in [('v', Tool::Select), ('m', Tool::Measure), ('c', Tool::Section), ('e', Tool::Explode)] {
             if ui.input.keys.contains(&Key::Char(k)) {
-                s.tool = t;
+                pick_tool(t);
             }
         }
     }
     for t in [Tool::Select, Tool::Measure, Tool::Section, Tool::Explode] {
         if ui.clicked(Id::new("outil").with(t as u8)) {
-            s.tool = t;
+            pick_tool(t);
         }
     }
     if ui.clicked(Id::new("racine")) || ui.clicked(Id::new("racine").with("flèche")) {

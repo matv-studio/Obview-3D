@@ -52,14 +52,14 @@ pub fn cylinder(c: [f32; 3], r: f32, h: f32, seg: u32) -> Mesh {
 /// Support usiné : platine, moyeu, nervures, quatre vis.
 pub fn bracket() -> Model {
     let mut parts = vec![
-        Part { name: "Platine".into(), mesh: cuboid([0.0, 0.0, 0.0], [2.0, 0.15, 1.3]) },
-        Part { name: "Moyeu".into(), mesh: cylinder([0.0, 0.55, 0.0], 0.55, 0.95, 64) },
-        Part { name: "Alésage".into(), mesh: cylinder([0.0, 0.62, 0.0], 0.3, 1.0, 48) },
-        Part { name: "Nervure avant".into(), mesh: cuboid([0.0, 0.4, 0.85], [0.08, 0.25, 0.32]) },
-        Part { name: "Nervure arrière".into(), mesh: cuboid([0.0, 0.4, -0.85], [0.08, 0.25, 0.32]) },
+        Part { name: "Base plate".into(), mesh: cuboid([0.0, 0.0, 0.0], [2.0, 0.15, 1.3]) },
+        Part { name: "Hub".into(), mesh: cylinder([0.0, 0.55, 0.0], 0.55, 0.95, 64) },
+        Part { name: "Bore".into(), mesh: cylinder([0.0, 0.62, 0.0], 0.3, 1.0, 48) },
+        Part { name: "Front rib".into(), mesh: cuboid([0.0, 0.4, 0.85], [0.08, 0.25, 0.32]) },
+        Part { name: "Back rib".into(), mesh: cuboid([0.0, 0.4, -0.85], [0.08, 0.25, 0.32]) },
     ];
     for (i, (x, z)) in [(-1.6, -0.9), (1.6, -0.9), (-1.6, 0.9), (1.6, 0.9)].into_iter().enumerate() {
-        parts.push(Part { name: format!("Vis M6 · {}", i + 1), mesh: cylinder([x, 0.2, z], 0.16, 0.12, 32) });
+        parts.push(Part { name: format!("M6 screw · {}", i + 1), mesh: cylinder([x, 0.2, z], 0.16, 0.12, 32) });
     }
     Model { parts, unit_m: 0.01, ..Default::default() }
 }

@@ -4,7 +4,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use obv_render::Camera;
-use obv_ui::{Color, Edges, Id, Node, Size, TextStyle, Ui, Weight, controls, widgets};
+use obv_ui::{Color, Edges, Id, Node, Size, TextStyle, Ui, Weight, controls, tr, widgets};
 use serde::{Deserialize, Serialize};
 
 use crate::{navigation, shell::AppState};
@@ -105,18 +105,18 @@ fn row(ui: &mut Ui, rid: Id, icon: &'static str, label: Node, trailing: Option<N
 pub fn tab(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     let c = ui.theme.color.clone();
     let text = TextStyle::new(ui.theme.size.font_size, Weight::Regular);
-    let mut out = vec![widgets::section_header(ui, "Standard")];
+    let mut out = vec![widgets::section_header(ui, tr("Standard"))];
     for (i, (name, v)) in STANDARD.iter().enumerate() {
         let rid = id("standard").with(i);
         if ui.clicked(rid) {
             let (yaw, pitch) = v.angles();
             s.camera_request = Some(Camera { yaw, pitch, ..s.camera });
         }
-        let label = Node::text(*name, text, c.text);
+        let label = Node::text(tr(name), text, c.text);
         out.push(row(ui, rid, "projection", label, None));
     }
     out.push(Node::new().height(Size::Px(8.0)));
-    out.push(widgets::section_header(ui, "Enregistrées"));
+    out.push(widgets::section_header(ui, tr("Enregistrées")));
 
     let mut remove = None;
     for i in 0..s.views.list.len() {
@@ -139,7 +139,7 @@ pub fn tab(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
                 ui,
                 controls::TextInput {
                     id: id("nom"),
-                    placeholder: "Nom",
+                    placeholder: tr("Nom"),
                     width: Size::Fill(1.0),
                     icon: None,
                     hint: None,
@@ -156,13 +156,13 @@ pub fn tab(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
         };
         let hovered = ui.hovered(rid) || ui.hovered(del);
         let trailing = (!editing).then(|| {
-            widgets::small_icon_button(ui, del, "close", "Supprimer la vue", c.icon).opacity(if hovered {
+            widgets::small_icon_button(ui, del, "close", tr("Supprimer la vue"), c.icon).opacity(if hovered {
                 1.0
             } else {
                 0.0
             })
         });
-        out.push(row(ui, rid, "bookmark", label, trailing).tooltip("Clic : afficher · double-clic : renommer"));
+        out.push(row(ui, rid, "bookmark", label, trailing).tooltip(tr("Clic : afficher · double-clic : renommer")));
     }
     // Fin du renommage : Entrée, Échap ou clic ailleurs.
     if let Some((k, t)) = s.views.renaming.clone() {
@@ -186,14 +186,22 @@ pub fn tab(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     }
     let add = id("ajouter");
     if ui.clicked(add) {
-        let n = (1..).find(|n| !s.views.list.iter().any(|v| v.name == format!("Vue {n}"))).unwrap_or(1);
-        s.views.list.push(SavedView::from_camera(format!("Vue {n}"), &s.camera));
+        let base = tr("Vue");
+        let n = (1..).find(|n| !s.views.list.iter().any(|v| v.name == format!("{base} {n}"))).unwrap_or(1);
+        s.views.list.push(SavedView::from_camera(format!("{base} {n}"), &s.camera));
         s.views.dirty = true;
     }
     out.push(Node::new().height(Size::Px(4.0)));
     out.push(
-        widgets::button(ui, add, "Enregistrer la vue", Some("plus"), widgets::ButtonKind::Secondary, "Vue actuelle")
-            .width(Size::Fill(1.0)),
+        widgets::button(
+            ui,
+            add,
+            tr("Enregistrer la vue"),
+            Some("plus"),
+            widgets::ButtonKind::Secondary,
+            tr("Vue actuelle"),
+        )
+        .width(Size::Fill(1.0)),
     );
     out
 }

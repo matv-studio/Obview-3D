@@ -36,8 +36,11 @@ Produit (consignes du 02/11 et du 09/11/2026)
 - Chaque écran vérifié visuellement **dans les deux thèmes**, captures envoyées.
 - Quand une limite bloque l'utilisateur, créer l'outil qui la lève.
 - Écran de référence : **16:9** (captures en 1920 × 1080, vérification en 2560 × 1440).
-- Navigation 3D : schémas des logiciels courants au choix, **Blender par défaut** (D-13). Couleur d'accent au
-  choix (D-14). Vues de rendu présentées comme la visionneuse web Marmoset (D-15).
+- Navigation 3D : schémas des logiciels courants au choix, **schéma « Obview » par défaut** (gauche :
+  panoramique, droit : orbite, molette ou Alt + droit : zoom ; D-29, Blender au choix, D-13). Couleur d'accent
+  au choix (D-14). **Anglais par défaut**, français au choix (D-29) : tout texte d'interface passe par
+  `tr("texte français")` avec sa traduction dans `apps/obview/src/lang.rs` (ou `obv_ui::i18n::OWN`) ; un essai
+  le vérifie. Vues de rendu présentées comme la visionneuse web Marmoset (D-15).
 - Le format `.mview` n'est pas pris en charge (décision du 09/11/2026).
 - **Ne pas mettre à jour la note de passation** (PC, documents du projet claude.ai) sauf demande de
   l'utilisateur. La mémoire du dépôt (ce fichier, `docs/`) reste tenue à jour.
@@ -95,7 +98,10 @@ Dépôt
 - Fenêtre sous Xvfb : `Xvfb :99 -screen 0 1920x1080x24 &`, `DISPLAY=:99 XDG_CONFIG_HOME=/tmp/obvcfg
   target/debug/obview --validation &`, puis `xdotool search --name "Obview 3D"` et `xdotool windowfocus <id>`
   (sans gestionnaire de fenêtres, le clavier n'arrive pas sinon) ; capture : `import -window root fichier.png`.
-  `OBV_DEBUG_KEYS=1` affiche les touches reçues.
+  `OBV_DEBUG_KEYS=1` affiche les touches reçues ; `OBV_DEBUG_LOAD=1` les étapes d'une ouverture et leur durée.
+  Sous lavapipe, une image d'un gros modèle prend plusieurs centaines de ms : les transitions y semblent
+  sautées et des clics rapprochés tombent dans la même image (les essais de capture prennent les transitions
+  à mi-course par le champ `settle`).
 - Icônes : `crates/obv-ui/assets/icons/*.svg` (grille 16, `stroke-width="1.5"` remplacé au rendu) ; ajouter le
   nom dans `crates/obv-ui/src/icon_list.rs`. Geist n'a ni U+202F ni U+2009 (espace synthétique dans `text.rs`).
 - Captures : `cargo test -p obview --test shell` (références dans `apps/obview/tests/reference`,

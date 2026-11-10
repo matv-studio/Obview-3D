@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use obv_io::Model;
+use obv_io::{Model, Progress};
 
 #[cfg(occt)]
 mod ffi;
@@ -27,6 +27,8 @@ pub enum CadError {
     Unsupported(String),
     #[error("{0}")]
     Read(String),
+    #[error("ouverture annulée")]
+    Cancelled,
 }
 
 /// Réglages du maillage des surfaces exactes.
@@ -48,26 +50,39 @@ impl Default for Options {
 
 /// Lit `path` (STEP ou IGES d'après l'extension).
 pub fn read(path: &Path, options: Options) -> Result<Model, CadError> {
+    read_with(path, options, &Progress::default())
+}
+
+/// Comme [`read`], en publiant l'avancement dans `progress` ; s'arrête au plus tôt quand il est annulé.
+pub fn read_with(path: &Path, options: Options, progress: &Progress) -> Result<Model, CadError> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let iges = match ext.as_str() {
         "step" | "stp" => false,
         "iges" | "igs" => true,
         _ => return Err(CadError::Unsupported(ext)),
     };
-    read_native(path, iges, options)
+    read_native(path, iges, options, progress)
 }
 
 #[cfg(not(occt))]
-fn read_native(_: &Path, _: bool, _: Options) -> Result<Model, CadError> {
+fn read_native(_: &Path, _: bool, _: Options, _: &Progress) -> Result<Model, CadError> {
     Err(CadError::Unavailable)
 }
 
 #[cfg(occt)]
-fn read_native(path: &Path, iges: bool, options: Options) -> Result<Model, CadError> {
-    use obv_io::{Material, Mesh, Part, SubMesh};
+fn read_native(path: &Path, iges: bool, options: Options, progress: &Progress) -> Result<Model, CadError> {
+    use obv_io::{Material, Mesh, Part, Stage, SubMesh};
     let p = path.to_str().ok_or_else(|| CadError::Read("chemin non représentable en UTF-8".into()))?;
-    let r =
-        ffi::bridge::read_cad(p, iges, &ffi::bridge::CadOptions { linear: options.linear, angular: options.angular });
+    let r = ffi::bridge::read_cad(
+        p,
+        iges,
+        &ffi::bridge::CadOptions { linear: options.linear, angular: options.angular },
+        &ffi::CadProgress(progress),
+    );
+    if progress.cancelled() {
+        return Err(CadError::Cancelled);
+    }
+    progress.stage(Stage::Prepare);
     if !r.error.is_empty() {
         return Err(CadError::Read(r.error));
     }
@@ -121,7 +136,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("deux_cubes.step");
         assert!(ffi::bridge::write_test_step(path.to_str().unwrap()), "écriture du jeu d'essai");
-        let m = read(&path, Options::default()).unwrap();
+        let progress = Progress::default();
+        let m = read_with(&path, Options::default(), &progress).unwrap();
+        assert_eq!(progress.get().0, obv_io::Stage::Prepare);
         assert!((m.unit_m - 0.001).abs() < 1e-12, "{}", m.unit_m);
         assert_eq!(m.parts.len(), 2, "{:?}", m.parts.iter().map(|p| &p.name).collect::<Vec<_>>());
         for p in &m.parts {
@@ -135,5 +152,16 @@ mod tests {
         assert_eq!(names, ["Cube gauche", "Cube droit"]);
         assert_eq!(m.display_color(0), None);
         assert_eq!(m.display_color(1), Some([255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn annulation() {
+        let dir = std::env::temp_dir().join("obv-cad-essai-annule");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("deux_cubes.step");
+        assert!(ffi::bridge::write_test_step(path.to_str().unwrap()));
+        let progress = Progress::default();
+        progress.cancel();
+        assert!(matches!(read_with(&path, Options::default(), &progress), Err(CadError::Cancelled)));
     }
 }

@@ -24,7 +24,10 @@
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <Message_PrinterOStream.hxx>
+#include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressRange.hxx>
+#include <Message_ProgressScope.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <Poly_Triangulation.hxx>
 #include <STEPCAFControl_Reader.hxx>
@@ -49,6 +52,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -202,9 +206,23 @@ Prototype mesh_prototype(const TDF_Label& ref, const TopoDS_Shape& shape) {
   return out;
 }
 
+// Relaie l'avancement d'OpenCASCADE (fraction globale de l'indicateur) vers Rust, pour une étape donnée.
+class Indicator : public Message_ProgressIndicator {
+public:
+  Indicator(const CadProgress& progress, uint8_t stage) : progress_(progress), stage_(stage) {}
+
+  void Show(const Message_ProgressScope&, const bool) override { progress_.report(stage_, GetPosition()); }
+
+  bool UserBreak() override { return progress_.cancelled(); }
+
+private:
+  const CadProgress& progress_;
+  uint8_t stage_;
+};
+
 } // namespace
 
-CadResult read_cad(rust::Str path, bool iges, const CadOptions& options) {
+CadResult read_cad(rust::Str path, bool iges, const CadOptions& options, const CadProgress& progress) {
   CadResult result;
   result.unit_m = 0.001;
   try {
@@ -215,19 +233,27 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options) {
     occ::handle<TDocStd_Document> doc;
     app->NewDocument("BinXCAF", doc);
     bool ok = false;
+    // L'analyse du fichier (ReadFile) ne rend pas compte de son avancement : étape indéterminée.
+    progress.report(0, -1.0);
+    occ::handle<Indicator> transfer = new Indicator(progress, 1);
     if (iges) {
       IGESCAFControl_Reader reader;
       reader.SetColorMode(true);
       reader.SetNameMode(true);
       reader.SetLayerMode(true);
-      ok = reader.ReadFile(file.c_str()) == IFSelect_RetDone && reader.Transfer(doc);
+      ok = reader.ReadFile(file.c_str()) == IFSelect_RetDone && !progress.cancelled() &&
+           (progress.report(1, 0.0), reader.Transfer(doc, transfer->Start()));
     } else {
       STEPCAFControl_Reader reader;
       reader.SetColorMode(true);
       reader.SetNameMode(true);
       reader.SetLayerMode(true);
       reader.SetPropsMode(true);
-      ok = reader.ReadFile(file.c_str()) == IFSelect_RetDone && reader.Transfer(doc);
+      ok = reader.ReadFile(file.c_str()) == IFSelect_RetDone && !progress.cancelled() &&
+           (progress.report(1, 0.0), reader.Transfer(doc, transfer->Start()));
+    }
+    if (progress.cancelled()) {
+      return result;
     }
     if (!ok) {
       result.error = rust::String("lecture refusée par OpenCASCADE (fichier illisible ou incomplet)");
@@ -249,6 +275,24 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options) {
     double diag = box.IsVoid() ? 1.0 : std::sqrt(box.SquareExtent());
     const double deflection = std::max(diag * options.linear, 1e-7);
 
+    // Formes de référence distinctes à mailler : l'avancement du maillage se compte en formes.
+    std::set<std::string> distinct;
+    for (XCAFPrs_DocumentExplorer ex(doc, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes); ex.More(); ex.Next()) {
+      if (ex.Current().Style.IsVisible()) {
+        TCollection_AsciiString entry;
+        TDF_Tool::Entry(ex.Current().RefLabel, entry);
+        distinct.insert(entry.ToCString());
+      }
+    }
+    progress.report(2, 0.0);
+    occ::handle<Indicator> meshing = new Indicator(progress, 2);
+    Message_ProgressScope scope(meshing->Start(), "", std::max<size_t>(distinct.size(), 1));
+    IMeshTools_Parameters params;
+    params.Deflection = deflection;
+    params.Angle = options.angular;
+    params.Relative = false;
+    params.InParallel = true;
+
     std::map<std::string, Prototype> cache;
     for (XCAFPrs_DocumentExplorer ex(doc, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes); ex.More(); ex.Next()) {
       const XCAFPrs_DocumentNode& node = ex.Current();
@@ -264,7 +308,10 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options) {
         if (shape.IsNull()) {
           continue;
         }
-        BRepMesh_IncrementalMesh mesher(shape, deflection, false, options.angular, true);
+        if (progress.cancelled()) {
+          return result;
+        }
+        BRepMesh_IncrementalMesh mesher(shape, params, scope.Next());
         it = cache.emplace(key, mesh_prototype(node.RefLabel, shape)).first;
       }
       const Prototype& proto = it->second;
