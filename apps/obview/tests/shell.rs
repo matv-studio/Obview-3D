@@ -101,6 +101,9 @@ fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8
     let (mut ui, state, accent) = prepare(model, file_name, shot);
     let mut f = OffscreenFrame::new(gpu, w, h).unwrap();
     f.set_model(model, &state, accent).unwrap();
+    if let Some(env) = &state.lighting.env {
+        f.set_environment(env).unwrap();
+    }
     f.render(&mut ui, &state).unwrap()
 }
 
@@ -118,10 +121,27 @@ fn capture_gl(model: &Model, file_name: &str, shot: &Shot<'_>) -> Option<Vec<u8>
     };
     let (mut ui, state, accent) = prepare(model, file_name, shot);
     f.set_model(model, &state, accent).unwrap();
+    if let Some(env) = &state.lighting.env {
+        f.set_environment(env).unwrap();
+    }
     Some(f.render(&mut ui, &state))
 }
 
 /// Interface et état après les clics et survols du cliché ; couleur de sélection en sRGB 8 bits.
+static THUMBS: std::sync::LazyLock<obview::lighting::Thumbs> = std::sync::LazyLock::new(obview::lighting::thumbnails);
+
+/// Environnement préparé d'un scénario, gardé pour tout le processus.
+fn environment(key: &str) -> std::sync::Arc<obv_render::light::Environment> {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<String, Arc<obv_render::light::Environment>>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    let mut c = CACHE.lock().unwrap();
+    c.entry(key.to_string()).or_insert_with(|| Arc::new(obview::lighting::build(key, None).unwrap())).clone()
+}
+
 fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState, [u8; 4]) {
     let (w, h) = shot.size;
     let logical = vec2(w as f32 / shot.scale, h as f32 / shot.scale);
@@ -131,6 +151,17 @@ fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState, [u
     // Texte fixe : les références ne dépendent pas de la version de Mesa.
     state.renderer = (obview::gfx::Backend::Vulkan, "Vulkan 1.4 · llvmpipe".into());
     (shot.setup)(&mut state);
+    // Éclairage (D-33) : environnement du réglage (ou `OBV_LIGHT=<clé>`), préparé une fois par processus.
+    if let Ok(k) = std::env::var("OBV_LIGHT") {
+        state.settings.lighting.preset = k;
+    }
+    if std::env::var_os("OBV_LIGHT_BG").is_some() {
+        state.settings.lighting.background = true;
+    }
+    let key = state.settings.lighting.preset.clone();
+    state.lighting.env = Some(environment(&key));
+    state.lighting.key = key;
+    state.lighting.thumbs = THUMBS.clone();
     let mut ui = Ui::new(shell::theme(&state));
     let frame = |ui: &mut Ui, state: &mut AppState, time: f64, pointer, down: bool| {
         let buttons = [down, false, false];
@@ -282,6 +313,64 @@ fn reglages_barre_et_affichage() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
+/// Menu du bouton du document (D-33) : ouvrir, puis fichiers récents avec leur type (fichiers d'essai créés
+/// dans le dossier temporaire : le menu ne montre que les fichiers présents).
+#[test]
+fn fichiers_recents_deux_themes() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    static CLICKS: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("fichier")]);
+    let shot = Shot {
+        clicks: &*CLICKS,
+        setup: |s| {
+            let dir = std::env::temp_dir().join("obview-recents");
+            std::fs::create_dir_all(&dir).unwrap();
+            s.recent = ["support.step", "Iconic.obj", "Carter moteur.glb", "Platine.stl", "Capot.igs", "Roue.fbx"]
+                .iter()
+                .map(|n| {
+                    let p = dir.join(n);
+                    std::fs::write(&p, b"").unwrap();
+                    p
+                })
+                .collect();
+        },
+        hover: Some(Id::new("récents").with("ouvrir")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(shot, "recents_sombre", "recents_clair"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Onglet « Éclairage » du panneau droit (D-33) : scénarios, réglages ; fond d'environnement visible.
+#[test]
+fn eclairage_deux_themes() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let tab = Shot {
+        setup: |s| {
+            s.right_open = true;
+            s.right_tab = 1;
+            s.settings.lighting.preset = "studio-photo".into();
+            s.settings.lighting.background = true;
+            s.settings.lighting.blur = 0.35;
+        },
+        hover: Some(Id::new("éclairage").with("carte").with("neon")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(tab, "eclairage_sombre", "eclairage_clair"));
+    let neon = Shot {
+        setup: |s| {
+            s.right_open = true;
+            s.right_tab = 1;
+            s.settings.lighting.preset = "neon".into();
+            s.settings.lighting.tint = 0;
+        },
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(neon, "eclairage_neon_sombre", "eclairage_neon_clair"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
 /// Version fictive proposée par les captures des mises à jour.
 fn release() -> obview::update::Release {
     use obview::update::{Asset, Release, Version};
@@ -387,16 +476,16 @@ fn outils_deux_themes() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
-/// Onglet « Vues » et fenêtre de capture.
+/// Menu des vues (barre du haut, D-33) et fenêtre de capture.
 #[test]
 fn vues_et_capture() {
     use obview::views::SavedView;
     let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
     let model = demo::bracket();
+    static VUES: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("vues bouton")]);
     let vues = Shot {
+        clicks: &*VUES,
         setup: |s| {
-            s.left_open = true;
-            s.left_tab = 1;
             s.views.list = vec![
                 SavedView::from_camera("Vue de détail".into(), &s.camera),
                 SavedView::from_camera("Présentation".into(), &s.camera),
@@ -405,7 +494,7 @@ fn vues_et_capture() {
         hover: Some(Id::new("vues").with("vue").with(0usize)),
         ..Default::default()
     };
-    shoot(&gpu, &model, &both(vues, "onglet_vues_sombre", "onglet_vues_clair"));
+    shoot(&gpu, &model, &both(vues, "menu_vues_sombre", "menu_vues_clair"));
     static CLICKS: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("capture")]);
     let capture = Shot { clicks: &*CLICKS, ..Default::default() };
     shoot(&gpu, &model, &both(capture, "capture_fenetre_sombre", "capture_fenetre_claire"));

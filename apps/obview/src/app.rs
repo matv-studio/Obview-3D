@@ -112,6 +112,9 @@ pub struct App {
     quit: bool,
     /// Thème imposé à la barre de titre de la fenêtre (`None` : celui du système).
     window_theme: Option<WinTheme>,
+    /// Préparation d'un environnement d'éclairage (clé, résultat) et des aperçus (D-33).
+    env_job: Option<Receiver<(String, Result<obv_render::light::Environment, String>)>>,
+    thumbs_job: Option<Receiver<crate::lighting::Thumbs>>,
 }
 
 /// Lit un fichier : STEP / IGES par OpenCASCADE (D-27), les maillages par les lecteurs d'Obview.
@@ -148,6 +151,7 @@ impl App {
         let model = Model::default();
         let mut state = AppState::new("", &model);
         state.settings = Settings::load();
+        state.recent = crate::recent::load();
         let ui = Ui::new(shell::theme(&state));
         let mut app = App {
             gfx: None,
@@ -176,6 +180,8 @@ impl App {
             updating: None,
             quit: false,
             window_theme: None,
+            env_job: None,
+            thumbs_job: None,
             applied_renderer: RendererChoice::Auto,
         };
         app.state.views.list = app.views.0.get(&app.file_key).cloned().unwrap_or_default();
@@ -226,6 +232,13 @@ impl App {
         s.inspector = self.state.inspector;
         s.renderer = self.state.renderer.clone();
         s.update = self.state.update.clone();
+        s.lighting = std::mem::take(&mut self.state.lighting);
+        s.right_tab = self.state.right_tab;
+        s.recent = std::mem::take(&mut self.state.recent);
+        crate::recent::push(&mut s.recent, &path);
+        if let Err(e) = crate::recent::save(&s.recent) {
+            eprintln!("Obview 3D : fichiers récents : {e}");
+        }
         self.file_key = std::fs::canonicalize(&path).unwrap_or(path).to_string_lossy().into_owned();
         s.views.list = self.views.0.get(&self.file_key).cloned().unwrap_or_default();
         self.state = s;
@@ -343,8 +356,68 @@ impl App {
         }
     }
 
+    /// Éclairage (D-33) : préparation demandée, environnement reçu envoyé au GPU, aperçus reçus.
+    fn poll_lighting(&mut self) {
+        if let Some(key) = self.state.lighting.request.take() {
+            let file = self.state.settings.lighting.file.clone();
+            let (tx, rx) = channel();
+            let proxy = self.proxy.clone();
+            let k = key.clone();
+            std::thread::spawn(move || {
+                let r = crate::lighting::build(&k, file.as_deref());
+                let _ = tx.send((k, r));
+                let _ = proxy.send_event(Wake);
+            });
+            self.env_job = Some(rx);
+            self.state.lighting.loading = Some(key);
+        }
+        if let Some(rx) = &self.env_job
+            && let Ok((key, r)) = rx.try_recv()
+        {
+            self.env_job = None;
+            self.state.lighting.loading = None;
+            match r {
+                Ok(env) => {
+                    if let Some(g) = &mut self.gfx
+                        && let Err(e) = g.set_environment(&env)
+                    {
+                        eprintln!("Obview 3D : environnement : {e}");
+                    }
+                    self.state.lighting.env = Some(Arc::new(env));
+                    self.state.lighting.key = key;
+                    self.state.lighting.error = None;
+                }
+                Err(e) => {
+                    // HDRI illisible : on revient à l'environnement affiché.
+                    self.state.lighting.error = Some(e);
+                    if !self.state.lighting.key.is_empty() {
+                        self.state.settings.lighting.preset = self.state.lighting.key.clone();
+                    }
+                }
+            }
+        }
+        if let Some(rx) = &self.thumbs_job
+            && let Ok(t) = rx.try_recv()
+        {
+            self.thumbs_job = None;
+            self.state.lighting.thumbs = t;
+        }
+    }
+
+    fn start_lighting(&mut self) {
+        self.state.lighting.request = Some(self.state.settings.lighting.preset.clone());
+        let (tx, rx) = channel();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::lighting::thumbnails());
+            let _ = proxy.send_event(Wake);
+        });
+        self.thumbs_job = Some(rx);
+    }
+
     fn poll_jobs(&mut self) {
         self.poll_update();
+        self.poll_lighting();
         // Modèle reçu à l'image précédente (carte « Préparation » montrée) : installé maintenant.
         if let Some((_, _, shown)) = &self.ready
             && *shown
@@ -419,6 +492,17 @@ impl App {
         for req in std::mem::take(&mut self.state.requests) {
             match req {
                 Request::CancelOpen => self.cancel_open(),
+                Request::OpenPath(p) => self.open(p),
+                Request::LoadHdri => {
+                    let mut d =
+                        rfd::FileDialog::new().set_title(tr("Charger un HDRI")).add_filter("HDRI", &["hdr", "exr"]);
+                    if let Some(w) = &window {
+                        d = d.set_parent(w.as_ref());
+                    }
+                    if let Some(p) = d.pick_file() {
+                        crate::lighting::set_file(&mut self.state, p);
+                    }
+                }
                 Request::OpenFile => {
                     let mut d = rfd::FileDialog::new()
                         .set_title(tr("Ouvrir"))
@@ -603,6 +687,12 @@ impl App {
         }
         self.state.renderer = (gfx.backend, gfx.description.clone());
         self.applied_renderer = self.state.settings.renderer;
+        let mut gfx = gfx;
+        if let Some(env) = &self.state.lighting.env
+            && let Err(e) = gfx.set_environment(env)
+        {
+            eprintln!("Obview 3D : environnement : {e}");
+        }
         self.gfx = Some(gfx);
         // Nouveau moteur : atlas et géométrie à renvoyer.
         let size = self.ui.atlas.size;
@@ -707,6 +797,11 @@ impl App {
         };
         let ctx = NavContext { input: &input, view, over_ui, settings: &self.state.settings };
         let moved = self.nav.update(&ctx, &mut self.state.camera, &mut pick);
+        if self.nav.dome_delta != 0.0 {
+            let l = &mut self.state.settings.lighting;
+            l.rotation = (l.rotation + self.nav.dome_delta).rem_euclid(360.0);
+            self.state.settings_dirty = true;
+        }
         let left_pressed = input.buttons[0] && !prev_buttons[0];
         let left_released = !input.buttons[0] && prev_buttons[0];
         // Un clic gauche sans déplacement sélectionne, même quand le glisser gauche navigue (schéma Obview).
@@ -749,7 +844,6 @@ impl App {
                 if double && let Some(i) = part {
                     let s = &mut self.state;
                     s.left_open = true;
-                    s.left_tab = 0;
                     s.root_open = true;
                     if !s.filtered().contains(&i) {
                         s.search.clear();
@@ -1033,6 +1127,7 @@ impl ApplicationHandler<Wake> for App {
             if let Some(g) = &self.gfx {
                 g.window.request_redraw();
             }
+            self.start_lighting();
             // Recherche automatique : au plus une fois par jour (D-32).
             let s = &self.state.settings;
             if s.check_updates && unix_now().saturating_sub(s.last_update_check) >= 20 * 3600 {

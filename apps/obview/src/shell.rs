@@ -62,7 +62,6 @@ pub struct AppState {
     pub selected: Option<usize>,
     pub root_open: bool,
     pub tool: Tool,
-    pub left_tab: usize,
     pub search: String,
     pub camera: Camera,
     /// Panneaux latéraux ouverts (masqués par défaut : la vue occupe tout l'écran).
@@ -71,6 +70,12 @@ pub struct AppState {
     pub reveal: Option<usize>,
     /// Mises à jour (D-32) : état et demande de l'interface, traitée par l'application.
     pub update: crate::update::Status,
+    /// Éclairage : environnement chargé, aperçus, demandes (D-33).
+    pub lighting: crate::lighting::EnvState,
+    /// Onglet du panneau droit : 0 propriétés, 1 éclairage.
+    pub right_tab: usize,
+    /// Fichiers récemment ouverts, le plus récent en tête (D-33).
+    pub recent: Vec<std::path::PathBuf>,
     /// Version affichée dans les réglages (celle de la construction ; fixée par les essais de capture).
     pub app_version: &'static str,
     pub update_request: Option<crate::update::Action>,
@@ -155,7 +160,6 @@ impl AppState {
             selected: None,
             root_open: true,
             tool: Tool::Select,
-            left_tab: 0,
             search: String::new(),
             camera: Camera::default(),
             inspector: Inspector::Off,
@@ -164,6 +168,9 @@ impl AppState {
             reveal: None,
             update: Default::default(),
             app_version: crate::update::CURRENT,
+            recent: Vec::new(),
+            lighting: Default::default(),
+            right_tab: 0,
             update_request: None,
             left_presses: 0,
             right_open: false,
@@ -293,6 +300,60 @@ fn update_pill(ui: &mut Ui, s: &AppState) -> Option<Node> {
     )
 }
 
+/// Bouton des vues (standard et enregistrées), dans le coin haut droit de la vue (D-33).
+fn views_button(ui: &mut Ui) -> Node {
+    let id = Id::new("vues bouton");
+    let c = ui.theme.color.clone();
+    let open = ui.popup_open(id);
+    let color = if open { c.text } else { c.icon };
+    let mut b = widgets::small_icon_button(ui, id, "camera", tr("Vues"), color).size(Size::Px(28.0), Size::Px(28.0));
+    if open {
+        b = b.bg(c.surface_active);
+    }
+    b
+}
+
+/// Menu des vues sous son bouton, aligné à droite : vues standard, vues enregistrées du fichier, enregistrer.
+fn views_popup(ui: &mut Ui, s: &mut AppState) {
+    let bid = Id::new("vues bouton");
+    if ui.clicked(bid) {
+        ui.toggle_popup(bid);
+    }
+    if !ui.popup_open(bid) || s.parts.is_empty() {
+        return;
+    }
+    let Some(r) = ui.rect_of(bid) else { return };
+    let c = ui.theme.color.clone();
+    let rows = views::tab(ui, s);
+    let w = 260.0;
+    // Hauteur du contenu : en-têtes 32, lignes 28, bouton 28 et marges ; au plus 70 % de la fenêtre.
+    let content = 2.0 * 32.0 + (7 + s.views.list.len()) as f32 * 28.0 + 8.0 + 4.0 + 28.0 + 12.0;
+    let h = content.min(ui.input.size.y * 0.7);
+    let appear = ui.appear(Id::new("vues menu"), 120.0);
+    let menu = Node::column()
+        .anchor(Anchor {
+            left: Some((r.max.x - w).max(8.0)),
+            top: Some(r.max.y + 6.0 - (1.0 - appear) * 4.0),
+            ..Default::default()
+        })
+        .opacity(appear)
+        .width(Size::Px(w))
+        .height(Size::Px(h))
+        .radius(ui.theme.size.radius_panel)
+        .bg(c.raised)
+        .border(1.0, c.border_strong)
+        .shadow(40.0, vec2(0.0, 16.0), c.shadow)
+        .clip()
+        .child(
+            Node::scroll(Id::new("vues défilement"))
+                .width(Size::Fill(1.0))
+                .height(Size::Fill(1.0))
+                .padding(Edges::xy(6.0, 6.0))
+                .children(rows),
+        );
+    ui.overlay(Node::stack().child(menu), obv_ui::Layer::Popup);
+}
+
 fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let c = ui.theme.color.clone();
     let m = ui.theme.size.clone();
@@ -304,7 +365,7 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     ));
     let file = Node::row()
         .id(Id::new("fichier"))
-        .tooltip_shortcut(tr("Ouvrir un fichier"), "Ctrl O")
+        .tooltip(tr("Fichiers récents"))
         .gap(6.0)
         .padding(Edges::xy(8.0, 0.0))
         .height(Size::Px(28.0))
@@ -369,16 +430,6 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
 
 fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
     let c = ui.theme.color.clone();
-    if s.left_tab == 1 {
-        let tabs = widgets::tabs(ui, Id::new("onglets"), &[tr("Pièces"), tr("Vues")], s.left_tab);
-        let header = Node::column().padding(Edges { left: 8.0, right: 8.0, top: 10.0, bottom: 6.0 }).child(tabs);
-        let body = Node::scroll(Id::new("vues défilement"))
-            .width(Size::Fill(1.0))
-            .height(Size::Fill(1.0))
-            .padding(Edges::xy(6.0, 4.0))
-            .children(views::tab(ui, s));
-        return widgets::panel(ui, s.settings.left_width).child(header).child(body);
-    }
     let scroll_id = Id::new("arbre");
     let filtered = s.filtered();
     let count = 1 + if s.root_open { filtered.len() } else { 0 };
@@ -435,7 +486,6 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         ));
     }
     list.push(Node::new().height(Size::Px(after)));
-    let tabs = widgets::tabs(ui, Id::new("onglets"), &[tr("Pièces"), tr("Vues")], s.left_tab);
     let (search, changed) = controls::text_input(
         ui,
         TextInput {
@@ -452,11 +502,7 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         st.target = 0.0;
         st.offset = 0.0;
     }
-    let header = Node::column()
-        .padding(Edges { left: 8.0, right: 8.0, top: 10.0, bottom: 6.0 })
-        .gap(8.0)
-        .child(tabs)
-        .child(search);
+    let header = Node::column().padding(Edges { left: 8.0, right: 8.0, top: 10.0, bottom: 6.0 }).gap(8.0).child(search);
     let shown = if s.search.trim().is_empty() {
         i18n::pick(
             format!("{} parts · {} triangles", group(s.parts.len()), compact(s.total_triangles())),
@@ -482,10 +528,32 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
         .child(footer)
 }
 
-fn properties_panel(ui: &mut Ui, s: &AppState) -> Node {
+/// Panneau droit : onglets Propriétés et Éclairage (D-33).
+fn properties_panel(ui: &mut Ui, s: &mut AppState) -> Node {
+    let c = ui.theme.color.clone();
+    for i in 0..2 {
+        if ui.clicked(Id::new("onglets droite").with(i)) {
+            s.right_tab = i;
+        }
+    }
+    let tabs = widgets::tabs(ui, Id::new("onglets droite"), &[tr("Propriétés"), tr("Éclairage")], s.right_tab);
+    let header = Node::column().padding(Edges { left: 8.0, right: 8.0, top: 10.0, bottom: 4.0 }).child(tabs);
+    let body = if s.right_tab == 1 {
+        Node::scroll(Id::new("éclairage défilement"))
+            .width(Size::Fill(1.0))
+            .height(Size::Fill(1.0))
+            .padding(Edges { left: 0.0, right: 0.0, top: 0.0, bottom: 10.0 })
+            .children(crate::lighting::tab(ui, s))
+    } else {
+        properties_content(ui, s)
+    };
+    widgets::panel(ui, s.settings.right_width).border_left(c.border).child(header).child(body)
+}
+
+fn properties_content(ui: &mut Ui, s: &AppState) -> Node {
     let units = s.settings.units;
     let c = ui.theme.color.clone();
-    let mut col = widgets::panel(ui, s.settings.right_width).border_left(c.border).padding(Edges::xy(0.0, 6.0));
+    let mut col = Node::column().width(Size::Fill(1.0)).padding(Edges::xy(0.0, 6.0));
     match s.selected.and_then(|i| s.parts.get(i)) {
         Some(p) => {
             col.push(
@@ -548,6 +616,7 @@ pub fn tool_button_id(b: ToolButton) -> Id {
         ToolButton::Projection => Id::new("projection"),
         ToolButton::Capture => Id::new("capture"),
         ToolButton::Frame => Id::new("cadrer"),
+        ToolButton::Panels => Id::new("panneaux"),
     }
 }
 
@@ -574,6 +643,7 @@ fn toolbar(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
             ToolButton::Explode => s.tool == Tool::Explode,
             ToolButton::Render => s.inspector != Inspector::Off,
             ToolButton::Projection => s.camera.ortho,
+            ToolButton::Panels => s.left_open || s.right_open,
             _ => false,
         };
         items.push(widgets::icon_button(ui, tool_button_id(b), b.icon(), b.label(), b.shortcut(), active));
@@ -637,6 +707,9 @@ fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
     if let Some(layer) = inspector::overlay(ui, s) {
         root.push(layer);
     }
+    if let Some(layer) = inspector::stats(ui, s) {
+        root.push(layer);
+    }
     if let Some(layer) = tools::overlay(ui, s) {
         root.push(layer);
     }
@@ -672,6 +745,10 @@ fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
                 .size(Size::Px(side), Size::Px(side))
                 .anchor(Anchor { top: Some(12.0), right: Some(12.0), ..Default::default() }),
         );
+    }
+    // Menu des vues : coin haut droit de la vue, contre le gizmo (D-33), posé après lui pour recevoir le clic.
+    if !s.parts.is_empty() {
+        root.push(views_button(ui).anchor(Anchor { top: Some(8.0), right: Some(8.0), ..Default::default() }));
     }
     root
 }
@@ -742,6 +819,8 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     );
     // Activité longue : ligne de 2 px en haut de la fenêtre (charte).
     let root = Node::stack().fill().child(column).children(crate::loading::top_line(ui, s));
+    views_popup(ui, s);
+    crate::recent::popup(ui, s);
     settings_ui::dialog(ui, s);
     convert_ui::dialog(ui, s);
     root
@@ -823,7 +902,8 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
         s.right_open = !s.right_open;
     }
     handle_grips(ui, s);
-    if ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('\\')) {
+    // Les deux panneaux ensemble : bouton de la barre du bas ou Ctrl \ (fermés si l'un est ouvert).
+    if ui.clicked(Id::new("panneaux")) || (ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('\\'))) {
         let open = !(s.left_open || s.right_open);
         s.left_open = open;
         s.right_open = open;
@@ -834,7 +914,8 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
             s.convert.status = convert_ui::Status::Idle;
         }
     }
-    if ui.clicked(Id::new("fichier")) || (ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('o'))) {
+    // Bouton du document : menu des récents (crate::recent) ; Ctrl O ouvre directement le dialogue.
+    if ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('o')) {
         s.requests.push(Request::OpenFile);
     }
     let ctrl = ui.input.modifiers.ctrl;
@@ -891,11 +972,6 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     }
     if ui.clicked(Id::new("racine")) || ui.clicked(Id::new("racine").with("flèche")) {
         s.root_open = !s.root_open;
-    }
-    for i in 0..2 {
-        if ui.clicked(Id::new("onglets").with(i)) {
-            s.left_tab = i;
-        }
     }
     for i in 0..s.parts.len() {
         if ui.clicked(Id::new("pièce").with(i).with("œil")) {

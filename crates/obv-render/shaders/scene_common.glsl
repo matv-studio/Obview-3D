@@ -1,3 +1,6 @@
+#extension GL_GOOGLE_include_directive : require
+#include "light_block.glsl"
+
 #ifdef OBV_GL
 // OpenGL 4.30 (moteur de secours, D-30) : tampons de stockage liés à des points fixes au lieu des adresses ;
 // positions et normales lues en flottants (pas de 12 octets, comme la disposition scalaire de Vulkan).
@@ -11,6 +14,7 @@ layout(std430, binding = 4) readonly buffer ParamsBuf {
     vec3 forward;
     uint flags;
     vec4 plane;
+    LIGHT_BLOCK
     vec4 offsets[];
 } params_b;
 layout(std140, binding = 0) uniform Push {
@@ -49,6 +53,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Par
     uint flags;
     // Plan de coupe : on garde dot(plane.xyz, p) <= plane.w.
     vec4 plane;
+    LIGHT_BLOCK
     // Décalage de chaque pièce (vue éclatée), dans l'ordre du tracé.
     vec4 offsets[];
 };

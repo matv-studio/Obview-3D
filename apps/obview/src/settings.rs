@@ -304,6 +304,8 @@ pub struct Settings {
     /// Largeur des panneaux latéraux, 200 à 520 px (charte).
     pub left_width: f32,
     pub right_width: f32,
+    /// Éclairage de la vue (D-33).
+    pub lighting: crate::lighting::LightingSettings,
     /// Recherche des mises à jour au démarrage, au plus une fois par jour (D-32).
     pub check_updates: bool,
     /// Dernière recherche de mise à jour, en secondes depuis 1970.
@@ -362,10 +364,12 @@ pub enum ToolButton {
     Projection,
     Capture,
     Frame,
+    /// Affiche ou masque les deux panneaux latéraux.
+    Panels,
 }
 
 impl ToolButton {
-    pub const ALL: [ToolButton; 8] = [
+    pub const ALL: [ToolButton; 9] = [
         ToolButton::Select,
         ToolButton::Measure,
         ToolButton::Section,
@@ -374,6 +378,7 @@ impl ToolButton {
         ToolButton::Projection,
         ToolButton::Capture,
         ToolButton::Frame,
+        ToolButton::Panels,
     ];
     pub fn label(self) -> &'static str {
         tr(match self {
@@ -385,6 +390,7 @@ impl ToolButton {
             ToolButton::Projection => "Perspective ou orthographique",
             ToolButton::Capture => "Capture",
             ToolButton::Frame => "Focus",
+            ToolButton::Panels => "Panneaux",
         })
     }
     pub fn icon(self) -> &'static str {
@@ -397,6 +403,7 @@ impl ToolButton {
             ToolButton::Projection => "projection",
             ToolButton::Capture => "capture",
             ToolButton::Frame => "frame",
+            ToolButton::Panels => "panels",
         }
     }
     pub fn shortcut(self) -> Option<&'static str> {
@@ -409,6 +416,7 @@ impl ToolButton {
             ToolButton::Projection => Some("P"),
             ToolButton::Capture => None,
             ToolButton::Frame => Some("F"),
+            ToolButton::Panels => Some("Ctrl \\"),
         }
     }
     /// Groupe visuel (séparateur entre deux groupes).
@@ -416,7 +424,7 @@ impl ToolButton {
         match self {
             ToolButton::Select | ToolButton::Measure | ToolButton::Section | ToolButton::Explode => 0,
             ToolButton::Render | ToolButton::Projection | ToolButton::Capture => 1,
-            ToolButton::Frame => 2,
+            ToolButton::Frame | ToolButton::Panels => 2,
         }
     }
 }
@@ -450,6 +458,7 @@ impl Default for Settings {
             toolbar_hidden: Vec::new(),
             left_width: 260.0,
             right_width: 280.0,
+            lighting: Default::default(),
             check_updates: true,
             last_update_check: 0,
         }

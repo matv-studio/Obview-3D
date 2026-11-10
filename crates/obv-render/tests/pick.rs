@@ -52,7 +52,8 @@ fn selection_au_pixel() {
     assert_eq!(r.pick(&cam, size, [399.5, 299.5]).unwrap().unwrap().id, 3);
 
     // Coupe z <= 0 : le petit carré (z = 0,25) est retiré.
-    r.set_params(&cam, &SceneParams { section: Some([0.0, 0.0, 1.0, 0.0]), offsets: &[] }).unwrap();
+    r.set_params(&cam, &SceneParams { section: Some([0.0, 0.0, 1.0, 0.0]), offsets: &[], ..Default::default() })
+        .unwrap();
     assert_eq!(r.pick(&cam, size, [399.5, 299.5]).unwrap().unwrap().id, 3);
     assert_eq!(gpu.validation_errors(), 0);
 }

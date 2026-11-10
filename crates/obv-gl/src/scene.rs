@@ -32,13 +32,14 @@ struct EdgePush {
     band: [f32; 4],
 }
 
-/// Bloc uniforme du fond (std140, 48 octets).
+/// Bloc uniforme du fond (std140, 112 octets).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BackgroundPush {
     top: [f32; 4],
     bottom: [f32; 4],
     band: [f32; 4],
+    inv_view_proj: [f32; 16],
 }
 
 struct Geometry {
@@ -76,6 +77,41 @@ pub struct GlScene {
     vao: glow::VertexArray,
     /// Coupe de l'image en cours (pour la sélection d'un bouchon).
     section: RefCell<Option<[f32; 4]>>,
+    /// Caméra de l'image en cours (directions du fond).
+    camera: RefCell<Camera>,
+    /// Pyramide d'environnement (D-33), unité de texture 1.
+    env: glow::Texture,
+}
+
+/// Texture RGBA16F à niveaux de l'environnement : longitude bouclée, latitude bornée.
+unsafe fn env_texture(gl: &glow::Context, levels: &[(u32, u32, Vec<u16>)]) -> Result<glow::Texture> {
+    unsafe {
+        let t = gl.create_texture().map_err(GlError::Other)?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(t));
+        let (w, h) = (levels[0].0 as i32, levels[0].1 as i32);
+        gl.tex_storage_2d(glow::TEXTURE_2D, levels.len() as i32, glow::RGBA16F, w, h);
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+        for (k, (lw, lh, data)) in levels.iter().enumerate() {
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                k as i32,
+                0,
+                0,
+                *lw as i32,
+                *lh as i32,
+                glow::RGBA,
+                glow::HALF_FLOAT,
+                glow::PixelUnpackData::Slice(Some(bytemuck::cast_slice(data))),
+            );
+        }
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, levels.len() as i32 - 1);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        Ok(t)
+    }
 }
 
 impl GlScene {
@@ -124,7 +160,17 @@ impl GlScene {
             if status != glow::FRAMEBUFFER_COMPLETE {
                 return Err(GlError::Other(format!("cible de sélection incomplète ({status:#x})")));
             }
-            let s = GlScene { programs, geometry: None, params, push, pick_target, vao, section: RefCell::new(None) };
+            let s = GlScene {
+                programs,
+                geometry: None,
+                params,
+                push,
+                pick_target,
+                vao,
+                section: RefCell::new(None),
+                camera: RefCell::new(Camera::default()),
+                env: env_texture(gl, &[(1, 1, vec![0, 0, 0, 0x3c00])])?,
+            };
             upload(gl, s.params, glow::SHADER_STORAGE_BUFFER, &[0; 64], glow::DYNAMIC_DRAW);
             Ok(s)
         }
@@ -175,6 +221,25 @@ impl GlScene {
         let ids: Vec<u32> = self.geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
         upload(&dev.gl, self.params, glow::SHADER_STORAGE_BUFFER, &encode_params(camera, p, &ids), glow::DYNAMIC_DRAW);
         *self.section.borrow_mut() = p.section;
+        *self.camera.borrow_mut() = *camera;
+    }
+
+    /// Remplace l'environnement d'éclairage (D-33).
+    pub fn set_environment(&mut self, dev: &GlDevice, env: &obv_render::light::Environment) -> Result<()> {
+        let gl = &dev.gl;
+        let t = unsafe { env_texture(gl, &env.levels)? };
+        unsafe { gl.delete_texture(self.env) };
+        self.env = t;
+        Ok(())
+    }
+
+    /// Environnement sur l'unité 1 ; l'unité 0 redevient active (l'interface y lie son atlas).
+    fn bind_env(&self, gl: &glow::Context) {
+        unsafe {
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.env));
+            gl.active_texture(glow::TEXTURE0);
+        }
     }
 
     fn bind_push(&self, gl: &glow::Context, bytes: &[u8]) {
@@ -205,13 +270,14 @@ impl GlScene {
         band: Band,
     ) {
         let gl = &dev.gl;
-        if set_rect(gl, rect, height).is_none() {
-            return;
-        }
+        let Some((w, h)) = set_rect(gl, rect, height) else { return };
         depth(gl, true, false, true);
         blend(gl, false);
-        self.bind_push(gl, bytemuck::bytes_of(&BackgroundPush { top, bottom, band: band.raw() }));
+        let inv_view_proj = obv_render::background_inverse(&self.camera.borrow(), (w / h) as f64);
+        self.bind_push(gl, bytemuck::bytes_of(&BackgroundPush { top, bottom, band: band.raw(), inv_view_proj }));
+        self.bind_env(gl);
         unsafe {
+            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(self.params));
             gl.use_program(Some(self.programs.background));
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
@@ -246,6 +312,7 @@ impl GlScene {
             bytemuck::bytes_of(&ScenePush { view_proj, mode: mode as u32, pad: [0; 3], band: band.raw() }),
         );
         self.bind_geometry(gl, g);
+        self.bind_env(gl);
         unsafe {
             gl.use_program(Some(p));
             gl.draw_arrays(glow::TRIANGLES, 0, g.index_count);
@@ -349,6 +416,7 @@ impl GlScene {
             gl.delete_framebuffer(self.pick_target.fbo);
             gl.delete_texture(self.pick_target.ids);
             gl.delete_texture(self.pick_target.depth);
+            gl.delete_texture(self.env);
         }
     }
 }

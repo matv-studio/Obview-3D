@@ -2,6 +2,8 @@
 //! Étapes suivantes (D-08) : grappes, niveaux de détail, tri GPU, mesh shaders, arêtes, sélection.
 
 mod edges;
+mod env_gpu;
+pub mod light;
 
 pub use edges::feature_edges;
 use obv_gpu::{Buffer, Gpu, GraphicsPipeline, Image, MemoryLocation, PipelineDesc, Result, ShaderStages, spirv, vk};
@@ -294,6 +296,7 @@ struct ParamsHeader {
     forward: [f32; 3],
     flags: u32,
     plane: [f32; 4],
+    light: light::LightBlock,
 }
 
 /// Réglages de la scène pour une image : coupe et vue éclatée.
@@ -303,6 +306,8 @@ pub struct SceneParams<'a> {
     pub section: Option<[f32; 4]>,
     /// Décalage de chaque pièce, indexé par `MeshInput::id` (vide : aucun).
     pub offsets: &'a [[f32; 3]],
+    /// Éclairage de l'image (D-33).
+    pub light: light::LightBlock,
 }
 
 /// Anneau de tampons de paramètres : une image en cours d'exécution n'est jamais réécrite.
@@ -365,6 +370,9 @@ struct ParamRing {
 struct ParamsData {
     section: Option<[f32; 4]>,
     offsets: Vec<[f32; 4]>,
+    light: light::LightBlock,
+    /// Caméra de la dernière image (directions du fond).
+    camera: Camera,
 }
 
 impl ParamsData {
@@ -373,7 +381,7 @@ impl ParamsData {
             .iter()
             .map(|&id| p.offsets.get(id as usize).map(|o| [o[0], o[1], o[2], 0.0]).unwrap_or([0.0; 4]))
             .collect();
-        ParamsData { section: p.section, offsets }
+        ParamsData { section: p.section, offsets, light: p.light, camera: Camera::default() }
     }
 
     fn encode(&self, camera: &Camera) -> Vec<u8> {
@@ -385,6 +393,7 @@ impl ParamsData {
             forward: [f[0] as f32, f[1] as f32, f[2] as f32],
             flags: self.section.is_some() as u32,
             plane: self.section.unwrap_or([0.0, 0.0, 0.0, 0.0]),
+            light: self.light,
         };
         let mut bytes = bytemuck::bytes_of(&header).to_vec();
         if self.offsets.is_empty() {
@@ -402,6 +411,76 @@ struct BackgroundPush {
     bottom: [f32; 4],
     /// Bande gardée (comme pour la scène).
     band: [f32; 4],
+    /// Inverse de la projection en perspective de la vue : directions du fond d'environnement.
+    inv_view_proj: [f32; 16],
+    params: u64,
+}
+
+/// Inverse d'une matrice 4 × 4 (colonnes), calculée en double précision ; identité si elle est singulière.
+pub fn inverse4(m: &[f32; 16]) -> [f32; 16] {
+    let a: Vec<f64> = m.iter().map(|&v| v as f64).collect();
+    let mut inv = [0.0f64; 16];
+    inv[0] =
+        a[5] * a[10] * a[15] - a[5] * a[11] * a[14] - a[9] * a[6] * a[15] + a[9] * a[7] * a[14] + a[13] * a[6] * a[11]
+            - a[13] * a[7] * a[10];
+    inv[4] =
+        -a[4] * a[10] * a[15] + a[4] * a[11] * a[14] + a[8] * a[6] * a[15] - a[8] * a[7] * a[14] - a[12] * a[6] * a[11]
+            + a[12] * a[7] * a[10];
+    inv[8] =
+        a[4] * a[9] * a[15] - a[4] * a[11] * a[13] - a[8] * a[5] * a[15] + a[8] * a[7] * a[13] + a[12] * a[5] * a[11]
+            - a[12] * a[7] * a[9];
+    inv[12] =
+        -a[4] * a[9] * a[14] + a[4] * a[10] * a[13] + a[8] * a[5] * a[14] - a[8] * a[6] * a[13] - a[12] * a[5] * a[10]
+            + a[12] * a[6] * a[9];
+    inv[1] =
+        -a[1] * a[10] * a[15] + a[1] * a[11] * a[14] + a[9] * a[2] * a[15] - a[9] * a[3] * a[14] - a[13] * a[2] * a[11]
+            + a[13] * a[3] * a[10];
+    inv[5] =
+        a[0] * a[10] * a[15] - a[0] * a[11] * a[14] - a[8] * a[2] * a[15] + a[8] * a[3] * a[14] + a[12] * a[2] * a[11]
+            - a[12] * a[3] * a[10];
+    inv[9] =
+        -a[0] * a[9] * a[15] + a[0] * a[11] * a[13] + a[8] * a[1] * a[15] - a[8] * a[3] * a[13] - a[12] * a[1] * a[11]
+            + a[12] * a[3] * a[9];
+    inv[13] =
+        a[0] * a[9] * a[14] - a[0] * a[10] * a[13] - a[8] * a[1] * a[14] + a[8] * a[2] * a[13] + a[12] * a[1] * a[10]
+            - a[12] * a[2] * a[9];
+    inv[2] =
+        a[1] * a[6] * a[15] - a[1] * a[7] * a[14] - a[5] * a[2] * a[15] + a[5] * a[3] * a[14] + a[13] * a[2] * a[7]
+            - a[13] * a[3] * a[6];
+    inv[6] =
+        -a[0] * a[6] * a[15] + a[0] * a[7] * a[14] + a[4] * a[2] * a[15] - a[4] * a[3] * a[14] - a[12] * a[2] * a[7]
+            + a[12] * a[3] * a[6];
+    inv[10] =
+        a[0] * a[5] * a[15] - a[0] * a[7] * a[13] - a[4] * a[1] * a[15] + a[4] * a[3] * a[13] + a[12] * a[1] * a[7]
+            - a[12] * a[3] * a[5];
+    inv[14] =
+        -a[0] * a[5] * a[14] + a[0] * a[6] * a[13] + a[4] * a[1] * a[14] - a[4] * a[2] * a[13] - a[12] * a[1] * a[6]
+            + a[12] * a[2] * a[5];
+    inv[3] =
+        -a[1] * a[6] * a[11] + a[1] * a[7] * a[10] + a[5] * a[2] * a[11] - a[5] * a[3] * a[10] - a[9] * a[2] * a[7]
+            + a[9] * a[3] * a[6];
+    inv[7] = a[0] * a[6] * a[11] - a[0] * a[7] * a[10] - a[4] * a[2] * a[11] + a[4] * a[3] * a[10] + a[8] * a[2] * a[7]
+        - a[8] * a[3] * a[6];
+    inv[11] = -a[0] * a[5] * a[11] + a[0] * a[7] * a[9] + a[4] * a[1] * a[11] - a[4] * a[3] * a[9] - a[8] * a[1] * a[7]
+        + a[8] * a[3] * a[5];
+    inv[15] = a[0] * a[5] * a[10] - a[0] * a[6] * a[9] - a[4] * a[1] * a[10] + a[4] * a[2] * a[9] + a[8] * a[1] * a[6]
+        - a[8] * a[2] * a[5];
+    let det = a[0] * inv[0] + a[1] * inv[4] + a[2] * inv[8] + a[3] * inv[12];
+    if det.abs() < 1e-300 {
+        let mut id = [0.0; 16];
+        for i in 0..4 {
+            id[i * 5] = 1.0;
+        }
+        return id;
+    }
+    std::array::from_fn(|i| (inv[i] / det) as f32)
+}
+
+/// Inverse de la projection en perspective de `camera` pour l'aspect `aspect` (fond d'environnement : même en
+/// projection orthographique, le fond garde la perspective).
+pub fn background_inverse(camera: &Camera, aspect: f64) -> [f32; 16] {
+    let persp = Camera { ortho: false, ..*camera };
+    inverse4(&persp.view_proj(aspect))
 }
 
 pub struct SceneRenderer {
@@ -415,12 +494,15 @@ pub struct SceneRenderer {
     pick_target: PickTarget,
     geometry: Option<Geometry>,
     params: std::cell::RefCell<ParamRing>,
+    env: env_gpu::EnvBinding,
 }
 
 const PICK_FORMAT: vk::Format = vk::Format::R32G32_UINT;
 
 impl SceneRenderer {
     pub fn new(gpu: &Gpu, color_format: vk::Format, depth_format: vk::Format) -> Result<Self> {
+        let env = env_gpu::EnvBinding::new(gpu)?;
+        let env_layouts = [env.layout];
         let pipeline = GraphicsPipeline::new(
             gpu,
             &PipelineDesc {
@@ -429,6 +511,7 @@ impl SceneRenderer {
                 depth_format: Some(depth_format),
                 cull_mode: vk::CullModeFlags::NONE,
                 push_constant_size: std::mem::size_of::<Push>() as u32,
+                set_layouts: &env_layouts,
                 ..Default::default()
             },
         )?;
@@ -442,6 +525,7 @@ impl SceneRenderer {
                 depth_compare: vk::CompareOp::ALWAYS,
                 cull_mode: vk::CullModeFlags::NONE,
                 push_constant_size: std::mem::size_of::<BackgroundPush>() as u32,
+                set_layouts: &env_layouts,
                 ..Default::default()
             },
         )?;
@@ -453,6 +537,7 @@ impl SceneRenderer {
                 depth_format: Some(depth_format),
                 cull_mode: vk::CullModeFlags::NONE,
                 push_constant_size: std::mem::size_of::<Push>() as u32,
+                set_layouts: &env_layouts,
                 ..Default::default()
             },
         )?;
@@ -531,7 +616,26 @@ impl SceneRenderer {
             pick_target,
             geometry: None,
             params: std::cell::RefCell::new(ParamRing::new(gpu, 1)?),
+            env,
         })
+    }
+
+    /// Remplace l'environnement d'éclairage (D-33).
+    pub fn set_environment(&mut self, env: &light::Environment) -> Result<()> {
+        self.env.set(env)
+    }
+
+    fn bind_env(&self, cmd: vk::CommandBuffer, p: &GraphicsPipeline) {
+        unsafe {
+            self.gpu.device().cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                p.layout,
+                0,
+                &[self.env.set],
+                &[],
+            )
+        };
     }
 
     /// Paramètres de l'image (œil, projection, coupe, éclatement), à donner avant les tracés de chaque image.
@@ -539,6 +643,7 @@ impl SceneRenderer {
         let ids: Vec<u32> = self.geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
         let mut ring = self.params.borrow_mut();
         ring.data = ParamsData::new(p, &ids);
+        ring.data.camera = *camera;
         let bytes = ring.data.encode(camera);
         let k = ring.next;
         ring.next = (k + 1) % PARAM_SLOTS;
@@ -620,11 +725,20 @@ impl SceneRenderer {
         bottom: [f32; 4],
         band: Band,
     ) {
-        if self.set_rect(cmd, rect).is_none() {
-            return;
-        }
+        let Some((w, h)) = self.set_rect(cmd, rect) else { return };
+        let camera = self.params.borrow().data.camera;
         self.background.bind(cmd);
-        self.background.push(cmd, &BackgroundPush { top, bottom, band: band.raw() });
+        self.bind_env(cmd, &self.background);
+        self.background.push(
+            cmd,
+            &BackgroundPush {
+                top,
+                bottom,
+                band: band.raw(),
+                inv_view_proj: background_inverse(&camera, (w / h) as f64),
+                params: self.current_params(),
+            },
+        );
         unsafe { self.gpu.device().cmd_draw(cmd, 3, 1, 0, 0) };
     }
 
@@ -653,6 +767,9 @@ impl SceneRenderer {
             _ => &self.pipeline,
         };
         p.bind(cmd);
+        if mode != RenderMode::XRay {
+            self.bind_env(cmd, p);
+        }
         p.push(cmd, &push);
         unsafe { d.cmd_draw(cmd, g.index_count, 1, 0, 0) };
         if mode == RenderMode::Edges

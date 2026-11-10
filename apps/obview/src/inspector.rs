@@ -230,28 +230,43 @@ pub fn overlay(ui: &mut Ui, s: &AppState) -> Option<Node> {
                 .child(Node::text(label(m), TextStyle::new(13.0, Weight::SemiBold), Color::WHITE)),
         );
     }
-    if s.inspector == Inspector::Off {
-        return Some(layer);
+    Some(layer)
+}
+
+/// Compteur triangles et sommets (pièces visibles) en bas à gauche de la vue : dans les vues de rendu, et quand
+/// le panneau des pièces est masqué (son pied de liste porte sinon ces nombres).
+pub fn stats(ui: &Ui, s: &AppState) -> Option<Node> {
+    let rendering = s.inspector != Inspector::Off;
+    if s.parts.is_empty() || (!rendering && s.left_open) {
+        return None;
     }
+    let c = &ui.theme.color;
+    // Vues de rendu : pastille sombre sur les bandes ; vue normale : pastille flottante du thème.
+    let (bg, border, value_c, label_c) = if rendering {
+        (Color::hex(0x101114).with_alpha(0.55), None, Color::WHITE.with_alpha(0.92), Color::WHITE.with_alpha(0.7))
+    } else {
+        (c.floating.with_alpha(0.92), Some(c.border), c.text, c.text_secondary)
+    };
     let (tris, verts) =
         s.parts.iter().filter(|p| p.visible).fold((0, 0), |(t, v), p| (t + p.triangles, v + p.vertices));
     let stat = |icon: &'static str, value: String, what: &str| {
         Node::row()
             .gap(5.0)
-            .child(Node::icon(icon, 12.0, Color::WHITE.with_alpha(0.7)))
-            .child(Node::text(value, TextStyle::new(11.5, Weight::SemiBold), Color::WHITE.with_alpha(0.92)))
-            .child(Node::text(what, TextStyle::new(11.5, Weight::Regular), Color::WHITE.with_alpha(0.7)))
+            .child(Node::icon(icon, 12.0, label_c))
+            .child(Node::text(value, TextStyle::new(11.5, Weight::SemiBold), value_c))
+            .child(Node::text(what, TextStyle::new(11.5, Weight::Regular), label_c))
     };
-    layer.push(
-        Node::row()
-            .anchor(Anchor { left: Some(12.0), bottom: Some(12.0), ..Default::default() })
-            .height(Size::Px(28.0))
-            .padding(Edges::xy(10.0, 0.0))
-            .radius(6.0)
-            .bg(Color::hex(0x101114).with_alpha(0.55))
-            .gap(14.0)
-            .child(stat("triangle", group(tris), tr("triangles")))
-            .child(stat("vertex", group(verts), tr("sommets"))),
-    );
-    Some(layer)
+    let mut pill = Node::row()
+        .anchor(Anchor { left: Some(12.0), bottom: Some(12.0), ..Default::default() })
+        .height(Size::Px(28.0))
+        .padding(Edges::xy(10.0, 0.0))
+        .radius(6.0)
+        .bg(bg)
+        .gap(14.0)
+        .child(stat("triangle", group(tris), tr("triangles")))
+        .child(stat("vertex", group(verts), tr("sommets")));
+    if let Some(b) = border {
+        pill = pill.border(1.0, b);
+    }
+    Some(Node::stack().fill().child(pill))
 }

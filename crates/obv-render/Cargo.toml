@@ -8,6 +8,9 @@ publish.workspace = true
 [dependencies]
 obv-gpu = { path = "../obv-gpu" }
 bytemuck.workspace = true
+rayon = "1"
+half = "2"
+exr = "1"
 
 [build-dependencies]
 obv-build = { path = "../obv-build" }

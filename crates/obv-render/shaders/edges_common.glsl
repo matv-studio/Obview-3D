@@ -8,6 +8,8 @@ layout(std430, binding = 4) readonly buffer ParamsBuf {
     vec3 forward;
     uint flags;
     vec4 plane;
+    // Bloc d'éclairage (20 vec4, voir scene_common.glsl), non lu ici.
+    vec4 light_unused[20];
     vec4 offsets[];
 } params_b;
 layout(std140, binding = 0) uniform Push {
@@ -36,6 +38,8 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Par
     vec3 forward;
     uint flags;
     vec4 plane;
+    // Bloc d'éclairage (20 vec4, voir scene_common.glsl), non lu ici.
+    vec4 light_unused[20];
     vec4 offsets[];
 };
 

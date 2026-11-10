@@ -57,6 +57,10 @@ impl Default for ConvertState {
 pub enum Request {
     /// Choisir un fichier à ouvrir.
     OpenFile,
+    /// Choisir un HDRI d'éclairage (.hdr, .exr, D-33).
+    LoadHdri,
+    /// Ouvrir ce fichier (liste des récents).
+    OpenPath(std::path::PathBuf),
     /// Abandonner la lecture en cours.
     CancelOpen,
     /// Choisir le fichier de sortie puis convertir.

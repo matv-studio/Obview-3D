@@ -227,6 +227,17 @@ impl Gfx {
         }
     }
 
+    /// Remplace l'environnement d'éclairage (D-33).
+    pub fn set_environment(&mut self, env: &obv_render::light::Environment) -> Result<(), String> {
+        match &mut self.inner {
+            Inner::Vulkan(v) => v.scene.set_environment(env).map_err(|e| e.to_string()),
+            Inner::Gl(g) => match &mut g.scene {
+                Some(s) => s.set_environment(&g.dev, env).map_err(|e| e.to_string()),
+                None => Ok(()),
+            },
+        }
+    }
+
     /// Sélection au pixel `px` d'une vue `size` (pixels de la cible).
     pub fn pick(&self, camera: &Camera, size: [f32; 2], px: [f32; 2]) -> Option<Pick> {
         match &self.inner {

@@ -104,7 +104,14 @@ pub struct Navigator {
     drag: Option<Drag>,
     prev_buttons: [bool; 3],
     transition: Option<Transition>,
+    /// Maj + glisser droit : rotation du dôme d'éclairage en cours (dernière abscisse du pointeur, D-33).
+    dome: Option<f32>,
+    /// Rotation du dôme demandée par l'image, en degrés (lue par l'application après `update`).
+    pub dome_delta: f32,
 }
+
+/// Degrés de rotation du dôme par pixel glissé.
+pub const DOME_SPEED: f32 = 0.35;
 
 /// Ce que la vue 3D sait de l'image : rectangle, pointeur au-dessus de l'interface ou non.
 pub struct NavContext<'a> {
@@ -117,7 +124,7 @@ pub struct NavContext<'a> {
 
 impl Navigator {
     pub fn dragging(&self) -> bool {
-        self.drag.is_some()
+        self.drag.is_some() || self.dome.is_some()
     }
     pub fn animating(&self) -> bool {
         self.transition.is_some()
@@ -162,6 +169,30 @@ impl Navigator {
 
         let pressed = |i: usize| input.buttons[i] && !self.prev_buttons[i];
         let buttons = [MouseButton::Left, MouseButton::Middle, MouseButton::Right];
+        // Maj + glisser droit, dans tous les schémas : rotation du dôme (comme Marmoset Viewer, D-33).
+        self.dome_delta = 0.0;
+        if self.drag.is_none()
+            && self.dome.is_none()
+            && pressed(2)
+            && input.modifiers.shift
+            && let Some(p) = input.pointer
+            && ctx.view.contains(p)
+            && !ctx.over_ui
+        {
+            self.dome = Some(p.x);
+        }
+        if let Some(x0) = self.dome {
+            match (input.buttons[2], input.pointer) {
+                (true, Some(p)) => {
+                    self.dome_delta = (p.x - x0) * DOME_SPEED;
+                    self.dome = Some(p.x);
+                }
+                (true, None) => {}
+                (false, _) => self.dome = None,
+            }
+            self.prev_buttons = input.buttons;
+            return moved;
+        }
         if self.drag.is_none()
             && let Some(p) = input.pointer
             && ctx.view.contains(p)

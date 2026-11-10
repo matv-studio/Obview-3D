@@ -444,3 +444,40 @@ Linux » ; « peux-tu utiliser le manifeste d'une app Windows pour éviter le wa
   (sombre imposé, ou celle du système avec « Système ») ; révision 2 des réglages : un fichier antérieur
   repasse une fois en sombre.
 - Flux de version : trois systèmes, brouillon du même numéro remplacé (demande « réutilise le n° 0.2.1 »).
+
+## D-33 · Éclairage par environnement, menu des vues, fichiers récents, bouton des panneaux (10/11/2026)
+
+Demande : « Rajoute différents scénarios de lumières et de HDRI, Shift + clic droit pour faire tourner le dôme.
+Studio, intérieur, extérieur, hard lights, différentes couleurs, gérable depuis un nouvel onglet dans le panneau
+à droite » ; « retire le panneau Vues du panneau latéral, mets un bouton » (placé finalement dans l'angle haut
+droit de la vue, à droite du gizmo, icône caméra) ; « un bouton dans la barre du bas pour afficher / masquer les
+panneaux (un seul bouton pour les deux) ; une fois masqués, garde l'affichage des sommets et triangles avec leurs
+icônes » ; « cliquer sur le nom du fichier ouvre un menu des modèles récemment ouverts (avec leur type) et, en
+haut, Ouvrir un fichier » ; « on fait le nouveau build sous le n° 0.3.0 ».
+
+- Éclairage (`crates/obv-render/src/light.rs`) : préfiltrage sur le processeur, à l'ouverture d'une ambiance
+  (parallèle, `rayon`) : irradiance en harmoniques sphériques d'ordre 2 (9 coefficients), réflexions par
+  pyramide équirectangulaire préfiltrée GGX (512 × 256, 6 niveaux de rugosité, RGBA16F), jusqu'à 4 lumières
+  directionnelles analytiques (soleil extrait d'un HDRI, ou boîtes à lumière des ambiances procédurales).
+  Ombrage : somme séparée (Karis), BRDF d'environnement analytique, GGX pour les lumières, matière satinée
+  unique (rugosité 0,42, F0 0,04), tonemapping Khronos PBR Neutral. Écartés : cubemaps (plus de code de
+  préparation pour un gain nul à cette résolution), préfiltrage GPU (dépend des deux moteurs ; la préparation
+  CPU prend moins d'une seconde pour un HDRI 1k).
+- Gain normalisé (0,85 / irradiance maximale) : toutes les ambiances donnent une exposition voisine ; un HDRI
+  est tourné pour amener sa direction la plus lumineuse à −40° d'azimut (lumière de trois quarts avant).
+- Ambiances : Studio photo, Studio chaud, Intérieur, Extérieur, Coucher de soleil (HDRI Poly Haven, CC0, 1k,
+  livrés dans l'exécutable, ~7,5 Mo, crédits dans `crates/obv-render/assets/hdri/CREDITS.md`) ; Studio (par
+  défaut), Lumière dure, Contre-jour, Néon, Chaud et froid (procédurales). HDRI de l'utilisateur (`.hdr`, `.exr`). Réglages :
+  exposition (IL), rotation, arrière-plan dégradé ou environnement (flou réglable), teinte (7 couleurs).
+  Shift + glisser droit fait tourner le dôme. Onglet « Éclairage » du panneau de droite.
+- Ombres portées et matériaux des fichiers (couleur, métal, rugosité, textures) : pas encore ; prochaine étape.
+- Vues : l'onglet du panneau de gauche disparaît ; bouton caméra dans l'angle haut droit de la vue, menu
+  déroulant (mêmes vues enregistrées, même capture).
+- Panneaux : bouton dans la barre du bas (Ctrl + \) qui masque ou montre les deux panneaux ; compteur
+  triangles / sommets avec icônes dans l'angle bas gauche de la vue quand le panneau de gauche est masqué, et
+  dans les vues de rendu.
+- Fichiers récents (`apps/obview/src/recent.rs`) : 12 au plus, `recents.json` dans le dossier de configuration,
+  fichiers disparus masqués ; menu sous le nom du fichier, « Ouvrir un fichier » en tête (Ctrl + O ouvre
+  toujours la boîte de dialogue directement).
+- Export en quads : abandonné à la demande de l'utilisateur.
+- Version 0.3.0 (nouvel en-tête des notes de version ; le brouillon v0.2.1 est dépassé).

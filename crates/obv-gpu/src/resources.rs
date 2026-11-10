@@ -86,6 +86,8 @@ pub struct Image {
     pub format: vk::Format,
     pub extent: vk::Extent2D,
     pub aspect: vk::ImageAspectFlags,
+    /// Niveaux de détail (1 : image simple).
+    pub mip_levels: u32,
 }
 
 impl Image {
@@ -97,14 +99,28 @@ impl Image {
         usage: vk::ImageUsageFlags,
         aspect: vk::ImageAspectFlags,
     ) -> Result<Self> {
+        Self::with_mips(gpu, name, format, extent, 1, usage, aspect)
+    }
+
+    /// Image à `mip_levels` niveaux de détail (remplis par l'appelant).
+    pub fn with_mips(
+        gpu: &Gpu,
+        name: &str,
+        format: vk::Format,
+        extent: vk::Extent2D,
+        mip_levels: u32,
+        usage: vk::ImageUsageFlags,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<Self> {
         let d = gpu.device();
+        let mip_levels = mip_levels.max(1);
         let raw = unsafe {
             d.create_image(
                 &vk::ImageCreateInfo::default()
                     .image_type(vk::ImageType::TYPE_2D)
                     .format(format)
                     .extent(vk::Extent3D { width: extent.width, height: extent.height, depth: 1 })
-                    .mip_levels(1)
+                    .mip_levels(mip_levels)
                     .array_layers(1)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
@@ -135,11 +151,11 @@ impl Image {
                     .image(raw)
                     .view_type(vk::ImageViewType::TYPE_2D)
                     .format(format)
-                    .subresource_range(subresource(aspect)),
+                    .subresource_range(subresource(aspect).level_count(mip_levels)),
                 None,
             )?
         };
-        Ok(Self { gpu: gpu.clone(), raw, view, allocation: Some(allocation), format, extent, aspect })
+        Ok(Self { gpu: gpu.clone(), raw, view, allocation: Some(allocation), format, extent, aspect, mip_levels })
     }
 
     /// Barrière de changement de disposition (synchronization2).
@@ -159,7 +175,7 @@ impl Image {
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(self.raw)
-            .subresource_range(subresource(self.aspect))];
+            .subresource_range(subresource(self.aspect).level_count(self.mip_levels))];
         unsafe {
             self.gpu.device().cmd_pipeline_barrier2(cmd, &vk::DependencyInfo::default().image_memory_barriers(&b))
         };

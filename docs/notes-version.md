@@ -21,16 +21,25 @@ Réglages › Mises à jour).
   fermer le message, puis Réglages Système → Confidentialité et sécurité → section Sécurité → « Ouvrir quand
   même » (bouton affiché environ une heure après la tentative), confirmer par mot de passe ou Touch ID.
 
-## Nouveautés de 0.2.1
+## Nouveautés de 0.3.0
 
+- Éclairage : dix ambiances (studio, studio photo, studio chaud, intérieur, extérieur, coucher de soleil,
+  lumière dure, contre-jour, néon, chaud et froid), HDRI personnel (.hdr, .exr), exposition, rotation,
+  environnement en arrière-plan (flou réglable), teinte ; Shift + glisser avec le bouton droit pour tourner le
+  dôme. Onglet « Lighting » du panneau de droite.
+- Menu des vues enregistrées : bouton caméra en haut à droite de la vue.
+- Fichiers récents : clic sur le nom du fichier dans la barre du haut.
+- Bouton de la barre du bas (Ctrl + \) pour masquer ou montrer les deux panneaux ; compteur triangles et
+  sommets dans la vue quand le panneau de gauche est masqué.
 - Installateurs Windows, macOS et Linux ; mises à jour détectées et installées depuis l'application (empreinte
   SHA-256 vérifiée), recherche au démarrage au plus une fois par jour, désactivable.
 - Thème sombre par défaut, barre de titre de la fenêtre comprise.
-
 - Rotation autour de l'objet par défaut (centre du modèle, ou de la pièce cadrée par Focus) ; la rotation
   autour du point visé reste au choix dans Réglages › Navigation.
 - Double-clic sur une pièce dans la vue : liste des pièces ouverte et centrée sur elle. Double-clic dans la
   liste : propriétés de la pièce.
+
+HDRI : Poly Haven (CC0) — Sergej Majboroda, Greg Zaal, Jarod Guest.
 
 ## Nouveautés de 0.2.0
 

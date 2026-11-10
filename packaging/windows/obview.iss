@@ -1,6 +1,6 @@
 ; Installateur Windows d'Obview 3D (Inno Setup 6.6 ou plus récent ; D-32).
 ;
-;   iscc /DAppVersion=0.2.1 /DSourceExe=<obview.exe> /DLicDir=<dossier des licences> /DOutputDir=<sortie> obview.iss
+;   iscc /DAppVersion=0.3.0 /DSourceExe=<obview.exe> /DLicDir=<dossier des licences> /DOutputDir=<sortie> obview.iss
 ;
 ; Installation par utilisateur sans droits d'administrateur (choix « tous les utilisateurs » proposé), assistant
 ; sombre, raccourci du menu Démarrer, « Ouvrir avec » pour les formats lus, désinstallation. La mise à jour depuis

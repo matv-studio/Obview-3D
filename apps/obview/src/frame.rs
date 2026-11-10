@@ -102,7 +102,8 @@ pub fn draw_view(scene: &dyn SceneDraw, state: &AppState, theme: &Theme, v: obv_
     let c = &theme.color;
     let cam = &state.camera;
     let offsets = tools::explode_offsets(state);
-    let params = SceneParams { section: tools::section_plane(state), offsets: &offsets };
+    let params =
+        SceneParams { section: tools::section_plane(state), offsets: &offsets, light: crate::lighting::block(state) };
     scene.set_params(cam, &params);
     // Vue normale et bandes des rendus selon les limites animées (au repos : l'état exact de l'inspecteur).
     let cuts = if animated { state.inspector_cuts } else { inspector::target_cuts(state.inspector) };
@@ -110,7 +111,8 @@ pub fn draw_view(scene: &dyn SceneDraw, state: &AppState, theme: &Theme, v: obv_
     let bottom = [c.viewport_bottom.r, c.viewport_bottom.g, c.viewport_bottom.b, 1.0];
     let gray = inspector::background(theme.kind == ThemeKind::Dark);
     for (m, band) in inspector::device_regions(v, &cuts, scale) {
-        let (t, b) = if m.is_some() { (gray, gray) } else { (top, bottom) };
+        // Alpha du haut : 1 autorise le fond d'environnement (vue normale), 0 le refuse (bandes des rendus).
+        let (t, b) = if m.is_some() { ([gray[0], gray[1], gray[2], 0.0], gray) } else { (top, bottom) };
         if !transparent {
             scene.background(rect, t, b, band);
         }
@@ -135,6 +137,9 @@ pub fn capture(
     let (w, h) = (width * ss, height * ss);
     let target = RenderTarget::new(gpu, w, h)?;
     let mut scene = SceneRenderer::new(gpu, RenderTarget::COLOR_FORMAT, RenderTarget::DEPTH_FORMAT)?;
+    if let Some(env) = &state.lighting.env {
+        scene.set_environment(env)?;
+    }
     let edges = (state.inspector != Inspector::Off).then(|| EdgeCache::compute(model));
     scene.set_meshes(&mesh_inputs(model, state, accent, edges.as_ref()))?;
     let v = state.viewport.get();
@@ -287,6 +292,11 @@ impl OffscreenFrame {
         self.scene.set_meshes(&meshes)
     }
 
+    /// Environnement d'éclairage (D-33).
+    pub fn set_environment(&mut self, env: &obv_render::light::Environment) -> Result<()> {
+        self.scene.set_environment(env)
+    }
+
     /// Rend l'image (l'interface doit déjà être terminée : `ui.finish`) et la relit en RGBA.
     pub fn render(&mut self, ui: &mut Ui, state: &AppState) -> Result<Vec<u8>> {
         let scale = ui.dl.scale;
@@ -344,6 +354,14 @@ impl GlOffscreenFrame {
         }
         let meshes = mesh_inputs(model, state, accent, self.edges.as_ref());
         self.scene.as_mut().unwrap().set_meshes(&self.headless.device, &meshes)
+    }
+
+    /// Environnement d'éclairage (D-33).
+    pub fn set_environment(
+        &mut self,
+        env: &obv_render::light::Environment,
+    ) -> std::result::Result<(), obv_gl::GlError> {
+        self.scene.as_mut().unwrap().set_environment(&self.headless.device, env)
     }
 
     pub fn render(&mut self, ui: &mut Ui, state: &AppState) -> Vec<u8> {

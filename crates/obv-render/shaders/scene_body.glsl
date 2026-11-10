@@ -3,6 +3,14 @@
 #extension GL_GOOGLE_include_directive : require
 #include "scene_common.glsl"
 
+#ifdef OBV_GL
+layout(binding = 1) uniform sampler2D env_map;
+#else
+layout(set = 0, binding = 0) uniform sampler2D env_map;
+#endif
+#define LIGHT PARAMS
+#include "light.glsl"
+
 layout(location = 0) in vec3 v_normal;
 layout(location = 1) in vec3 v_world;
 layout(location = 2) in flat uint v_color;
@@ -11,30 +19,6 @@ layout(location = 0) out vec4 out_color;
 
 vec3 srgb_to_linear(vec3 c) {
     return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
-}
-
-// Éclairage de présentation de pièces : ciel/sol, lumière principale, lumière d'appoint, contre-jour, reflet.
-vec3 lit(vec3 base, vec3 n, vec3 v) {
-    // Repère de la caméra : les lumières suivent la vue, comme dans les visionneuses CAO.
-    vec3 fwd = -v;
-    vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0) + vec3(1e-4, 0.0, 0.0)));
-    vec3 up = cross(right, fwd);
-    vec3 key = normalize(-fwd * 0.6 + up * 0.65 - right * 0.45);
-    vec3 fill = normalize(-fwd * 0.8 - up * 0.2 + right * 0.6);
-    vec3 rim = normalize(fwd * 0.7 + up * 0.5);
-    float hemi = 0.5 + 0.5 * dot(n, vec3(0.0, 1.0, 0.0));
-    vec3 ambient = mix(vec3(0.20, 0.19, 0.18), vec3(0.42, 0.44, 0.47), hemi);
-    float d_key = max(dot(n, key), 0.0);
-    float d_fill = max(dot(n, fill), 0.0);
-    float d_rim = pow(max(dot(n, rim), 0.0), 2.0);
-    vec3 h = normalize(key + v);
-    float shininess = 48.0;
-    float spec = pow(max(dot(n, h), 0.0), shininess) * (shininess + 8.0) / 25.13;
-    float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-    return base * (ambient * 0.55 + d_key * 0.85 + d_fill * 0.28)
-         + vec3(1.0) * (spec * 0.12 * (0.3 + 0.7 * fresnel))
-         + base * d_rim * 0.18
-         + vec3(fresnel * 0.06) * hemi;
 }
 
 void main() {
@@ -50,7 +34,7 @@ void main() {
         // située entre le plan et elle la cache, comme la matière le ferait.
         vec3 pn = PARAMS.plane.xyz;
         float hatch = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 9.0));
-        vec3 cap = lit(base, pn, v) * mix(0.62, 0.48, hatch);
+        vec3 cap = shade(base, pn, v) * mix(0.62, 0.48, hatch);
         out_color = vec4(cap, 1.0);
         return;
     }
@@ -75,7 +59,7 @@ void main() {
         float shade = 0.82 + 0.18 * max(dot(n, v), 0.0);
         color = vec3(0.92) * shade;
     } else {
-        color = lit(base, n, v);
+        color = shade(base, n, v);
     }
     out_color = vec4(color, 1.0);
 }

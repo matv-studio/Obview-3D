@@ -98,6 +98,11 @@ Dépôt
   (`macos-sdk.sh`, `linux-sdk.sh`), Inno Setup (`inno.ps1`), paquets (`macos-app.sh`, `macos-dmg.sh`,
   `linux-package.sh` ; `APPIMAGETOOL=none` : .deb seul, l'outil AppImage téléchargé est refusé dans la session).
 - `packaging/` : installateur Windows (`windows/obview.iss`), types MIME Linux.
+- Éclairage (D-33) : préfiltrage `crates/obv-render/src/light.rs` (HDRI dans `crates/obv-render/assets/hdri`,
+  crédits `CREDITS.md`), envoi au GPU `env_gpu.rs` (Vulkan) et `obv-gl/src/scene.rs`, nuanceurs `light.glsl`,
+  `light_block.glsl` ; onglet `apps/obview/src/lighting.rs`. Captures : `OBV_LIGHT=<clé>` (studio, studio-photo,
+  studio-warm, interior, outdoor, sunset, hard, rim, neon, warm-cool), `OBV_LIGHT_BG=1` (fond environnement).
+- Fichiers récents : `apps/obview/src/recent.rs`.
 - Mises à jour : `apps/obview/src/update.rs` (essai réseau : `cargo test -p obview --lib recherche_reelle --
   --ignored`).
 - `.github/workflows/` : `ci.yml` (Linux lavapipe et llvmpipe, Windows, macOS 26 arm64),
