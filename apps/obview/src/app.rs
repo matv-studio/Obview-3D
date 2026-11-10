@@ -546,6 +546,15 @@ impl App {
         let now = input.time;
         let prev_buttons = self.ui.input.buttons;
         self.ui.begin_frame(input.clone());
+        // Appuis gauches cumulés pendant l'appui en cours, gardés jusqu'à l'image du relâchement (clic lu par
+        // l'interface) : deux appuis dans une image lente forment un double-clic.
+        self.state.left_presses = if input.buttons[0] && !prev_buttons[0] {
+            burst
+        } else if input.buttons[0] || prev_buttons[0] {
+            self.state.left_presses.saturating_add(burst)
+        } else {
+            burst
+        };
         shell::handle(&mut self.ui, &mut self.state);
 
         // Navigation et sélection dans la vue 3D.
@@ -592,14 +601,21 @@ impl App {
                 let px = [(p.x - view.min.x) * scale, (p.y - view.min.y) * scale];
                 let hit = gfx.pick(&self.state.camera, [view.width() * scale, view.height() * scale], px);
                 let part = hit.map(|h| h.id as usize);
-                // Double-clic sur une pièce : sélection et panneau des propriétés ouvert.
+                // Double-clic sur une pièce : sélection, liste des pièces ouverte et défilée jusqu'à elle.
                 let double = part.is_some()
                     && (self.press_burst >= 2
                         || (self.last_click.is_some_and(|(t, q)| now - t < 0.45 && q == part)
                             && self.state.selected == part));
                 self.state.selected = part;
-                if double {
-                    self.state.right_open = true;
+                if double && let Some(i) = part {
+                    let s = &mut self.state;
+                    s.left_open = true;
+                    s.left_tab = 0;
+                    s.root_open = true;
+                    if !s.filtered().contains(&i) {
+                        s.search.clear();
+                    }
+                    s.reveal = Some(i);
                     self.last_click = None;
                 } else {
                     self.last_click = Some((now, part));
@@ -632,7 +648,7 @@ impl App {
                 if d != Vec2::default() {
                     crate::navigation::orbit(
                         &mut self.state.camera,
-                        cam.target,
+                        cam.pivot,
                         -d.x as f64 * 0.0075,
                         d.y as f64 * 0.0075,
                     );

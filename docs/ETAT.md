@@ -3,7 +3,7 @@
 Mis à jour : 10/11/2026.
 
 ## Fait
-- Décisions D-01 à D-30 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
+- Décisions D-01 à D-31 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
 - `obv-gpu` : appareil Vulkan 1.3, mesh shaders, mémoire, tampons par adresse, pipelines, rendu hors écran.
 - `obv-ui` : bibliothèque d'interface maison (D-12) : thèmes clair et sombre, texte, icônes, mise en page,
   survol, clics, info-bulles, animations ; composants (boutons, onglets, recherche, arbre, propriétés, barre
@@ -58,15 +58,18 @@ Mis à jour : 10/11/2026.
   4.3 de secours (`obv-gl`, mêmes nuanceurs, même image que Vulkan dans les essais), choix et bascule à chaud
   dans Réglages › Affichage ; version macOS Apple Silicon par KosmicKrisp (`tools/macos-sdk.sh`,
   `tools/macos-app.sh`, job CI `macos-26`) ; DirectX 12 écarté. Version 0.2.0.
+- D-31 : rotation autour de l'objet cadré par défaut (centre de rotation propre à la caméra, révision des
+  réglages) ; double-clic dans la vue → liste des pièces ouverte et centrée sur la pièce ; double-clic dans la
+  liste → propriétés. Version 0.2.1.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
-0. Brouillon de version v0.2.0 (Windows x64, macOS arm64) préparé par `version.yml` : à essayer et publier par
-   l'utilisateur ; le brouillon v0.1.0 est dépassé. Archives : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
+0. Brouillon de version v0.2.1 (Windows x64, macOS arm64) préparé par `version.yml` : à essayer et publier par
+   l'utilisateur ; les brouillons v0.1.0 et v0.2.0 sont dépassés. Archives 0.2.0 : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
    en CI (`macos-26`), le chargeur livré trouve le pilote KosmicKrisp, qui ne voit aucun GPU utilisable dans
    la machine virtuelle (pas de Metal 4) ; premier essai à faire par l'utilisateur. Bascule de moteur à chaud vérifiée seulement dans les
    essais. Ensuite : réglage de la finesse du maillage STEP ; arbre d'assemblage (chemins lus, pas encore
-   affichés) ; défilement de l'arbre jusqu'à la pièce double-cliquée ; Linux à discuter.
+   affichés) ; Linux à discuter.
 1. Rendu : arêtes vives et silhouettes, occlusion ambiante, lumière moins plate ; contour de la sélection.
 2. Fichiers récents ; menu contextuel de la vue (isoler, masquer, cadrer).
 3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie ;

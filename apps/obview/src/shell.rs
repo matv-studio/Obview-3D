@@ -67,6 +67,10 @@ pub struct AppState {
     pub camera: Camera,
     /// Panneaux latéraux ouverts (masqués par défaut : la vue occupe tout l'écran).
     pub left_open: bool,
+    /// Pièce à amener dans la liste (double-clic dans la vue) : défilement dès que la liste est mesurée.
+    pub reveal: Option<usize>,
+    /// Appuis gauches reçus depuis l'image précédente (deux appuis dans une même image lente : double-clic).
+    pub left_presses: u8,
     pub right_open: bool,
     /// Vues de rendu (D-15).
     pub inspector: Inspector,
@@ -152,6 +156,8 @@ impl AppState {
             inspector: Inspector::Off,
             inspector_cuts: inspector::target_cuts(Inspector::Off),
             left_open: false,
+            reveal: None,
+            left_presses: 0,
             right_open: false,
             scene_bounds: model.bounds(),
             convert: ConvertState::default(),
@@ -305,6 +311,20 @@ fn parts_panel(ui: &mut Ui, s: &mut AppState) -> Node {
     let scroll_id = Id::new("arbre");
     let filtered = s.filtered();
     let count = 1 + if s.root_open { filtered.len() } else { 0 };
+    // Pièce double-cliquée dans la vue : centrée dans la liste (défilement doux) dès que la liste a sa hauteur.
+    if let Some(i) = s.reveal
+        && let Some(st) = ui.scrolls.get_mut(&scroll_id)
+        && st.view > 0.0
+    {
+        if let Some(k) = filtered.iter().position(|&f| f == i).filter(|_| s.root_open) {
+            let content = count as f32 * TREE_ROW + 8.0;
+            let top = (k + 1) as f32 * TREE_ROW + 4.0;
+            st.target = (top - (st.view - TREE_ROW) * 0.5).clamp(0.0, (content - st.view).max(0.0));
+        }
+        s.reveal = None;
+        // Rendu à la demande : l'image suivante doit venir sans attendre un évènement.
+        ui.keep_animating();
+    }
     let (range, before, after) = controls::virtual_range(ui, scroll_id, TREE_ROW, count);
     let mut list = Node::scroll(scroll_id).width(Size::Fill(1.0)).height(Size::Fill(1.0)).padding(Edges::xy(6.0, 4.0));
     list.push(Node::new().height(Size::Px(before)));
@@ -802,6 +822,12 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
     for i in 0..s.parts.len() {
         if ui.clicked(Id::new("pièce").with(i).with("œil")) {
             s.parts[i].visible = !s.parts[i].visible;
+        } else if ui.double_clicked(Id::new("pièce").with(i))
+            || (ui.clicked(Id::new("pièce").with(i)) && s.left_presses >= 2)
+        {
+            // Double-clic dans la liste : pièce sélectionnée et panneau des propriétés ouvert.
+            s.selected = Some(i);
+            s.right_open = true;
         } else if ui.clicked(Id::new("pièce").with(i)) {
             s.selected = if s.selected == Some(i) { None } else { Some(i) };
         }

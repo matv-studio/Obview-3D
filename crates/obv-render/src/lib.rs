@@ -60,6 +60,8 @@ pub struct Camera {
     pub ortho: bool,
     /// Rayon de la scène (bornes de profondeur de la projection orthographique).
     pub radius: f64,
+    /// Centre de rotation : centre de l'objet cadré (modèle ou pièce), indépendant du panoramique et du zoom.
+    pub pivot: [f64; 3],
 }
 
 impl Default for Camera {
@@ -72,6 +74,7 @@ impl Default for Camera {
             fov_y: 35f64.to_radians(),
             ortho: false,
             radius: 1.0,
+            pivot: [0.0; 3],
         }
     }
 }
@@ -90,6 +93,7 @@ impl Camera {
         let half_v = self.fov_y * 0.5;
         let half_h = (half_v.tan() * aspect.max(1e-3)).atan();
         self.target = c;
+        self.pivot = c;
         self.distance = r / half_v.min(half_h).sin() * 1.05;
         self.radius = r.max(1e-9);
     }

@@ -152,6 +152,7 @@ impl Navigator {
             cam.distance = (lerp(t.from.distance.ln(), t.to.distance.ln())).exp();
             for i in 0..3 {
                 cam.target[i] = lerp(t.from.target[i], t.to.target[i]);
+                cam.pivot[i] = lerp(t.from.pivot[i], t.to.pivot[i]);
             }
             moved = true;
             if k >= 1.0 {
@@ -176,8 +177,9 @@ impl Navigator {
                     let eye = cam.eye();
                     let (pivot, depth) = match (action, hit) {
                         (NavAction::Orbit, Some(h)) if s.orbit_around_cursor => (h, dot(sub(eye, h), back)),
-                        (_, Some(h)) => (cam.target, dot(sub(eye, h), back)),
-                        _ => (cam.target, cam.distance),
+                        // Sans point visé : rotation autour de l'objet cadré (D-31).
+                        (_, Some(h)) => (cam.pivot, dot(sub(eye, h), back)),
+                        _ => (cam.pivot, cam.distance),
                     };
                     // Bouton gauche : le clic sélectionne ; le geste ne démarre qu'au-delà de 3 px.
                     let armed = *b != MouseButton::Left;
@@ -362,6 +364,39 @@ mod tests {
         step(&mut nav, &mut cam, 500.0, true, true);
         assert_eq!(cam.yaw, yaw1);
         assert!(!close(cam.target, t0));
+    }
+
+    /// Rotation par défaut autour de l'objet cadré (D-31) : après un panoramique, l'orbite tourne autour du
+    /// centre de l'objet, même quand une surface est sous le pointeur.
+    #[test]
+    fn orbite_autour_de_l_objet() {
+        let s = Settings::default();
+        let view = Rect::from_xywh(0.0, 0.0, 800.0, 600.0);
+        let mut nav = Navigator::default();
+        let mut cam = Camera::default();
+        cam.frame([-1.0, -1.0, -1.0], [3.0, 1.0, 1.0], 800.0 / 600.0);
+        let center = [1.0, 0.0, 0.0];
+        assert!(close(cam.pivot, center));
+        let step = |nav: &mut Navigator, cam: &mut Camera, x: f32, buttons: [bool; 3]| {
+            let input = FrameInput { pointer: Some(vec2(x, 300.0)), buttons, ..Default::default() };
+            nav.update(&NavContext { input: &input, view, over_ui: false, settings: &s }, cam, &mut |_| {
+                Some([5.0, 5.0, 5.0])
+            })
+        };
+        let (left, right) = ([true, false, false], [false, false, true]);
+        step(&mut nav, &mut cam, 400.0, [false; 3]);
+        step(&mut nav, &mut cam, 400.0, left);
+        step(&mut nav, &mut cam, 480.0, left);
+        step(&mut nav, &mut cam, 480.0, [false; 3]);
+        assert!(!close(cam.target, center) && close(cam.pivot, center), "le panoramique ne déplace pas le pivot");
+        let rel = |c: &Camera| {
+            let e = sub(c.eye(), center);
+            dot(e, e)
+        };
+        let r0 = rel(&cam);
+        step(&mut nav, &mut cam, 480.0, right);
+        step(&mut nav, &mut cam, 560.0, right);
+        assert!((rel(&cam) - r0).abs() < 1e-9, "l'œil reste à la même distance du centre de l'objet");
     }
 
     /// Schéma Obview (D-29) : glisser gauche = panoramique (au-delà de 3 px, un clic reste un clic), glisser

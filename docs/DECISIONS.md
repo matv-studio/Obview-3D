@@ -385,3 +385,20 @@ performant, sinon la couche de traduction, KosmicKrisp » ; « pas de licence Ap
   Mac réel.
 - Version 0.2.0 : Windows x64 et macOS arm64, brouillon par `version.yml` (D-28), notes dans
   `docs/notes-version.md`.
+
+## D-31 · Rotation autour de l'objet, double-clics vers les panneaux (10/11/2026)
+
+Demande : « Rotation par défaut autour de l'objet, pas autour du pointeur. Le double-clic est censé ouvrir le
+panneau latéral gauche, double-clic sur l'item dans la liste ouvre le panneau latéral droit. »
+
+- Rotation : nouveau centre de rotation de la caméra (`Camera::pivot`), posé au centre de l'objet cadré :
+  modèle entier à l'ouverture et par Focus sans sélection, pièce sélectionnée par Focus. Le panoramique et le
+  zoom vers le pointeur ne le déplacent pas ; les transitions l'interpolent ; le glisser du gizmo l'utilise
+  aussi. « Pivoter autour du point visé » reste au choix, désormais coupé par défaut. Les fichiers de réglages
+  reçoivent une révision (`revision`, 1) : un fichier antérieur repasse une fois sur la rotation autour de
+  l'objet, un choix fait ensuite est gardé.
+- Double-clic sur une pièce dans la vue : sélection, panneau gauche ouvert sur l'onglet Pièces, liste défilée
+  pour centrer la pièce (recherche effacée si elle la masquait). Double-clic sur une ligne de la liste :
+  sélection et panneau des propriétés ouvert (D-29 ouvrait directement les propriétés depuis la vue).
+  Deux appuis arrivés dans une même image lente comptent comme double-clic, dans la vue comme dans la liste.
+- Version 0.2.1.

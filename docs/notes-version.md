@@ -15,7 +15,14 @@ L'application n'est pas signée par un compte développeur Apple. macOS la bloqu
 
 Le bouton reste affiché environ une heure après la tentative d'ouverture. Les ouvertures suivantes sont normales.
 
-## Nouveautés depuis 0.1.0
+## Nouveautés de 0.2.1
+
+- Rotation autour de l'objet par défaut (centre du modèle, ou de la pièce cadrée par Focus) ; la rotation
+  autour du point visé reste au choix dans Réglages › Navigation.
+- Double-clic sur une pièce dans la vue : liste des pièces ouverte et centrée sur elle. Double-clic dans la
+  liste : propriétés de la pièce.
+
+## Nouveautés de 0.2.0
 
 - Moteur OpenGL 4.3 de secours quand Vulkan manque, même image que Vulkan ; choix dans Réglages → Affichage.
 - Version macOS pour Apple Silicon (Vulkan 1.4 par KosmicKrisp).

@@ -37,7 +37,8 @@ Produit (consignes du 02/11 et du 09/11/2026)
 - Quand une limite bloque l'utilisateur, créer l'outil qui la lève.
 - Écran de référence : **16:9** (captures en 1920 × 1080, vérification en 2560 × 1440).
 - Navigation 3D : schémas des logiciels courants au choix, **schéma « Obview » par défaut** (gauche :
-  panoramique, droit : orbite, molette ou Alt + droit : zoom ; D-29, Blender au choix, D-13). Couleur d'accent
+  panoramique, droit : orbite, molette ou Alt + droit : zoom ; D-29, Blender au choix, D-13), rotation autour
+  de l'objet cadré par défaut (D-31). Couleur d'accent
   au choix (D-14). **Anglais par défaut**, français au choix (D-29) : tout texte d'interface passe par
   `tr("texte français")` avec sa traduction dans `apps/obview/src/lang.rs` (ou `obv_ui::i18n::OWN`) ; un essai
   le vérifie. Vues de rendu présentées comme la visionneuse web Marmoset (D-15).

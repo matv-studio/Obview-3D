@@ -276,6 +276,9 @@ impl Units {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Révision du fichier : 0 pour un fichier antérieur à ce champ ; sert aux changements de valeur par défaut.
+    #[serde(default)]
+    pub revision: u32,
     pub language: Language,
     /// Moteur de rendu.
     pub renderer: RendererChoice,
@@ -302,6 +305,9 @@ pub struct Settings {
     pub left_width: f32,
     pub right_width: f32,
 }
+
+/// Révision courante du fichier de réglages. 1 : rotation autour de l'objet par défaut (D-31).
+pub const REVISION: u32 = 1;
 
 /// Largeurs permises des panneaux latéraux (charte : poignée de largeur 200–520 px).
 pub const PANEL_MIN: f32 = 200.0;
@@ -422,6 +428,7 @@ pub enum Scope {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            revision: REVISION,
             language: Language::English,
             renderer: RendererChoice::Auto,
             theme: ThemeChoice::Dark,
@@ -431,7 +438,7 @@ impl Default for Settings {
             navigation: NavScheme::Obview,
             invert_zoom: false,
             zoom_to_cursor: true,
-            orbit_around_cursor: true,
+            orbit_around_cursor: false,
             zoom_speed: 1.0,
             units: Units::Millimeters,
             gizmo: GizmoStyle::Axes,
@@ -487,6 +494,11 @@ impl Settings {
     }
 
     fn sanitized(mut self) -> Settings {
+        // Révision 1 (D-31) : rotation autour de l'objet, y compris pour un fichier écrit avant ce choix.
+        if self.revision < 1 {
+            self.orbit_around_cursor = false;
+        }
+        self.revision = REVISION;
         self.accent = self.accent.map(|a| a & 0xff_ffff);
         if !self.zoom_speed.is_finite() {
             self.zoom_speed = 1.0;
@@ -546,6 +558,18 @@ mod tests {
         let partial: Settings = serde_json::from_str(r#"{"navigation":"Rhino"}"#).unwrap();
         assert_eq!(partial.navigation, NavScheme::Rhino);
         assert!(partial.zoom_to_cursor);
+    }
+
+    #[test]
+    fn rotation_autour_de_l_objet_par_defaut() {
+        assert!(!Settings::default().orbit_around_cursor);
+        // Fichier antérieur à la révision 1 : rotation ramenée sur l'objet.
+        let old: Settings = serde_json::from_str(r#"{"orbit_around_cursor":true}"#).unwrap();
+        assert_eq!(old.revision, 0);
+        assert!(!old.sanitized().orbit_around_cursor);
+        // Choix fait après la révision 1 : conservé.
+        let new: Settings = serde_json::from_str(r#"{"revision":1,"orbit_around_cursor":true}"#).unwrap();
+        assert!(new.sanitized().orbit_around_cursor);
     }
 
     #[test]
