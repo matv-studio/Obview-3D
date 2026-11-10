@@ -9,7 +9,7 @@
   applications) ou `Obview-3D-<version>-linux-x86_64.AppImage` (toutes distributions, fichier à rendre
   exécutable). Pilote Vulkan (Mesa ou constructeur) ou OpenGL 4.3.
 
-Les versions suivantes s'installent depuis l'application (bouton « Mettre à jour » de la barre du haut, ou
+Depuis 0.3.0, les versions suivantes s'installent depuis l'application (bouton « Mettre à jour » de la barre du haut, ou
 Réglages › Mises à jour).
 
 ## Première ouverture
@@ -35,12 +35,15 @@ Réglages › Mises à jour).
 - Installateurs Windows, macOS et Linux ; mises à jour détectées et installées depuis l'application (empreinte
   SHA-256 vérifiée), recherche au démarrage au plus une fois par jour, désactivable.
 - Thème sombre par défaut, barre de titre de la fenêtre comprise.
+
+HDRI : Poly Haven (CC0) — Sergej Majboroda, Greg Zaal, Jarod Guest.
+
+## Nouveautés de 0.2.1
+
 - Rotation autour de l'objet par défaut (centre du modèle, ou de la pièce cadrée par Focus) ; la rotation
   autour du point visé reste au choix dans Réglages › Navigation.
 - Double-clic sur une pièce dans la vue : liste des pièces ouverte et centrée sur elle. Double-clic dans la
   liste : propriétés de la pièce.
-
-HDRI : Poly Haven (CC0) — Sergej Majboroda, Greg Zaal, Jarod Guest.
 
 ## Nouveautés de 0.2.0
 
