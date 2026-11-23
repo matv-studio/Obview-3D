@@ -294,7 +294,10 @@ pub fn convert_parts(
     for (i, f) in files.iter().enumerate() {
         // Le fichier principal prend exactement le chemin choisi ; les fichiers associés vont à côté.
         let target = if i == 0 { path.to_path_buf() } else { dir.join(&f.name) };
-        let tmp = target.with_extension("obv-tmp");
+        // Fichier temporaire à côté, extension d'origine gardée (deux sorties de même nom n'entrent pas en collision).
+        let mut tmp = target.clone().into_os_string();
+        tmp.push(".obv-tmp");
+        let tmp = std::path::PathBuf::from(tmp);
         std::fs::write(&tmp, &f.data)?;
         std::fs::rename(&tmp, &target)?;
     }
