@@ -21,6 +21,12 @@ Réglages › Mises à jour).
   fermer le message, puis Réglages Système → Confidentialité et sécurité → section Sécurité → « Ouvrir quand
   même » (bouton affiché environ une heure après la tentative), confirmer par mot de passe ou Touch ID.
 
+## Nouveautés de 0.3.1
+
+- Mises à jour : bouton « Version x.y.z » en haut à droite quand une version est disponible ; un clic propose
+  d'installer et de redémarrer. Réglages › Updates : version installée, recherche automatique (au démarrage puis
+  toutes les six heures), préversions au choix, recherche à la demande.
+
 ## Nouveautés de 0.3.0
 
 - Éclairage : dix ambiances (studio, studio photo, studio chaud, intérieur, extérieur, coucher de soleil,

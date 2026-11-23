@@ -63,6 +63,8 @@ pub struct Release {
     pub page: String,
     /// Fichier installable sur ce système ; absent : la page s'ouvre dans le navigateur.
     pub asset: Option<Asset>,
+    /// Préversion (proposée seulement si le réglage les accepte).
+    pub prerelease: bool,
 }
 
 /// Façon dont l'application en cours a été installée, donc dont elle se remplace.
@@ -130,16 +132,15 @@ fn agent() -> ureq::Agent {
     ureq::Agent::new_with_config(config)
 }
 
-/// Lit la réponse de `releases/latest` : une version plus récente que `current`, avec le fichier de `install`.
-pub fn parse_latest(json: &str, current: Version, install: &Install) -> Result<Option<Release>, String> {
-    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if v["draft"].as_bool() == Some(true) || v["prerelease"].as_bool() == Some(true) {
-        return Ok(None);
+/// Version d'une entrée de `releases` (objet JSON) plus récente que `current`, avec le fichier de `install` ;
+/// brouillons écartés, préversions seulement si `prerelease`.
+fn parse_release(v: &serde_json::Value, current: Version, install: &Install, prerelease: bool) -> Option<Release> {
+    if v["draft"].as_bool() == Some(true) || (!prerelease && v["prerelease"].as_bool() == Some(true)) {
+        return None;
     }
-    let tag = v["tag_name"].as_str().ok_or("tag_name absent")?;
-    let Some(version) = Version::parse(tag) else { return Err(format!("numéro de version illisible : {tag}")) };
+    let version = Version::parse(v["tag_name"].as_str()?)?;
     if version <= current {
-        return Ok(None);
+        return None;
     }
     let asset = install.suffix().and_then(|suffix| {
         v["assets"].as_array()?.iter().find_map(|a| {
@@ -156,14 +157,39 @@ pub fn parse_latest(json: &str, current: Version, install: &Install) -> Result<O
             })
         })
     });
-    Ok(Some(Release { version, page: v["html_url"].as_str().unwrap_or_default().to_string(), asset }))
+    Some(Release {
+        version,
+        page: v["html_url"].as_str().unwrap_or_default().to_string(),
+        asset,
+        prerelease: v["prerelease"].as_bool() == Some(true),
+    })
 }
 
-/// Interroge GitHub : `Some` si une version publiée est plus récente que celle-ci.
-pub fn check() -> Result<Option<Release>, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+/// Lit la réponse de `releases/latest` : une version plus récente que `current`, avec le fichier de `install`.
+pub fn parse_latest(json: &str, current: Version, install: &Install) -> Result<Option<Release>, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if v["tag_name"].as_str().is_none() {
+        return Err("tag_name absent".into());
+    }
+    Ok(parse_release(&v, current, install, false))
+}
+
+/// Lit la réponse de `releases` (liste) : la plus récente des versions plus récentes que `current`, préversions
+/// comprises si `prerelease`.
+pub fn parse_list(
+    json: &str,
+    current: Version,
+    install: &Install,
+    prerelease: bool,
+) -> Result<Option<Release>, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let list = v.as_array().ok_or("liste des versions illisible")?;
+    Ok(list.iter().filter_map(|r| parse_release(r, current, install, prerelease)).max_by_key(|r| r.version))
+}
+
+fn get(url: &str) -> Result<Option<String>, String> {
     let r = agent()
-        .get(&url)
+        .get(url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .call();
@@ -173,7 +199,19 @@ pub fn check() -> Result<Option<Release>, String> {
         Err(ureq::Error::StatusCode(404)) => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
-    let body = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    resp.body_mut().read_to_string().map(Some).map_err(|e| e.to_string())
+}
+
+/// Interroge GitHub : `Some` si une version publiée est plus récente que celle-ci ; `prerelease` : les
+/// préversions comptent aussi.
+pub fn check(prerelease: bool) -> Result<Option<Release>, String> {
+    if prerelease {
+        let Some(body) = get(&format!("https://api.github.com/repos/{REPO}/releases?per_page=30"))? else {
+            return Ok(None);
+        };
+        return parse_list(&body, Version::current(), &install_kind(), true);
+    }
+    let Some(body) = get(&format!("https://api.github.com/repos/{REPO}/releases/latest"))? else { return Ok(None) };
     parse_latest(&body, Version::current(), &install_kind())
 }
 
@@ -416,11 +454,28 @@ mod tests {
         assert_eq!(parse_latest(LATEST, Version(0, 3, 0), &win).unwrap(), None);
     }
 
+    #[test]
+    fn preversions() {
+        let list = r#"[
+            {"tag_name": "v0.4.0-beta.1", "draft": false, "prerelease": true, "html_url": "p", "assets": []},
+            {"tag_name": "v0.5.0", "draft": true, "prerelease": false, "html_url": "d", "assets": []},
+            {"tag_name": "v0.3.1", "draft": false, "prerelease": false, "html_url": "s", "assets": []}
+        ]"#;
+        let win = Install::WindowsSetup { all_users: false };
+        let pre = parse_list(list, Version(0, 3, 0), &win, true).unwrap().unwrap();
+        assert_eq!((pre.version, pre.prerelease), (Version(0, 4, 0), true));
+        let stable = parse_list(list, Version(0, 3, 0), &win, false).unwrap().unwrap();
+        assert_eq!((stable.version, stable.prerelease), (Version(0, 3, 1), false));
+        assert_eq!(parse_list(list, Version(0, 4, 0), &win, true).unwrap(), None);
+    }
+
     /// Interroge réellement GitHub (réseau) : `cargo test -p obview --lib recherche_reelle -- --ignored`.
     #[test]
     #[ignore]
     fn recherche_reelle() {
-        let r = check();
+        let r = check(false);
+        eprintln!("{r:?}");
+        let r = check(true);
         eprintln!("{r:?}");
         assert!(r.is_ok(), "{r:?}");
     }

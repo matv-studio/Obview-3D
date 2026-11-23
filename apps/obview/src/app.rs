@@ -268,8 +268,9 @@ impl App {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let proxy = self.proxy.clone();
+        let prerelease = self.state.settings.prereleases;
         std::thread::spawn(move || {
-            let _ = tx.send(UpdateMsg::Checked(update::check(), manual));
+            let _ = tx.send(UpdateMsg::Checked(update::check(prerelease), manual));
             let _ = proxy.send_event(Wake);
         });
         self.updating = Some(rx);
@@ -314,6 +315,15 @@ impl App {
     }
 
     fn poll_update(&mut self) {
+        // Recherche automatique : puis toutes les six heures tant que l'application reste ouverte (D-39).
+        if self.state.settings.check_updates
+            && self.updating.is_none()
+            && matches!(self.state.update, update::Status::Idle | update::Status::Current)
+            && unix_now().saturating_sub(self.state.settings.last_update_check) >= 6 * 3600
+            && self.state.settings.last_update_check > 0
+        {
+            self.start_update_check(false);
+        }
         if let Some(action) = self.state.update_request.take() {
             match action {
                 update::Action::Check => self.start_update_check(true),
@@ -1203,9 +1213,8 @@ impl ApplicationHandler<Wake> for App {
                 g.window.request_redraw();
             }
             self.start_lighting();
-            // Recherche automatique : au plus une fois par jour (D-32).
-            let s = &self.state.settings;
-            if s.check_updates && unix_now().saturating_sub(s.last_update_check) >= 20 * 3600 {
+            // Recherche automatique : à chaque démarrage (D-39).
+            if self.state.settings.check_updates {
                 self.start_update_check(false);
             }
         }

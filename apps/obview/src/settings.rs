@@ -310,6 +310,8 @@ pub struct Settings {
     pub render_views: Vec<String>,
     /// Recherche des mises à jour au démarrage, au plus une fois par jour (D-32).
     pub check_updates: bool,
+    /// Préversions proposées aussi (D-39).
+    pub prereleases: bool,
     /// Dernière recherche de mise à jour, en secondes depuis 1970.
     pub last_update_check: u64,
 }
@@ -463,6 +465,7 @@ impl Default for Settings {
             lighting: Default::default(),
             render_views: DEFAULT_VIEWS.iter().map(|m| m.key().to_string()).collect(),
             check_updates: true,
+            prereleases: false,
             last_update_check: 0,
         }
     }

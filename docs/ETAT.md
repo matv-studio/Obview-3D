@@ -79,11 +79,13 @@ Mis à jour : 23/11/2026.
   structure Assemblage / À plat, pièces Toutes / Visibles / Sélectionnée, pièces sous une taille ignorées,
   pièces cachées retirées (128 vues orthographiques rendues sur le processeur ; montre STEP : 155 pièces
   gardées sur 285, conversion complète en 28 s). Captures `conversion_pieces_*`.
+- D-39 : mises à jour alignées sur Revel (bouton « Version x.y.z », confirmation avant installation, préversions
+  au choix, recherche automatique toutes les six heures) ; version 0.3.1.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
-0. Brouillon de version v0.3.0 (installateurs Windows, macOS, Linux) préparé par `version.yml` : à essayer et
-   publier par l'utilisateur ; v0.2.1 est publiée (archives .zip, sans recherche de mises à jour : passage à 0.3.0 à la main) ; le brouillon v0.1.0 est dépassé. Archives 0.2.0 : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
+0. Brouillon de version v0.3.1 (installateurs Windows, macOS, Linux) préparé par `version.yml` : à essayer et
+   publier par l'utilisateur, comme version normale (pas préversion) pour que les copies 0.3.0 la voient ; v0.3.0 est publiée (préversion) ; v0.2.1 est publiée (archives .zip, sans recherche de mises à jour : passage à 0.3.0 à la main) ; le brouillon v0.1.0 est dépassé. Archives 0.2.0 : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
    en CI (`macos-26`), le chargeur livré trouve le pilote KosmicKrisp, qui ne voit aucun GPU utilisable dans
    la machine virtuelle (pas de Metal 4) ; premier essai à faire par l'utilisateur. Bascule de moteur à chaud vérifiée seulement dans les
    essais. Ensuite : réglage de la finesse du maillage STEP ; arbre d'assemblage (chemins lus, pas encore

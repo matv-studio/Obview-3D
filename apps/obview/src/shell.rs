@@ -264,40 +264,114 @@ pub fn progress_ring(ui: &Ui, size: f32, fraction: f32, color: Color) -> Node {
     .size(Size::Px(size), Size::Px(size))
 }
 
-/// Bouton de mise à jour de la barre du haut (D-32) : seulement quand une version plus récente est publiée.
+/// Bouton de mise à jour de la barre du haut (D-32, D-39) : seulement quand une version plus récente est publiée ;
+/// « Version x.y.z », un clic propose d'installer et de redémarrer.
 fn update_pill(ui: &mut Ui, s: &AppState) -> Option<Node> {
     use crate::update::Status;
     let release = s.update.release()?;
     let c = ui.theme.color.clone();
     let m = ui.theme.size.clone();
     let id = Id::new("mise à jour");
-    let hover = ui.anim(id.with("survol"), if ui.hovered(id) { 1.0 } else { 0.0 }, 120.0);
-    let mark = if c.has_accent { c.accent } else { c.set_text };
-    let tip = format!("Obview 3D {}", release.version);
+    let hover = ui.anim(id.with("survol"), if ui.hovered(id) || ui.popup_open(id) { 1.0 } else { 0.0 }, 120.0);
+    let fg = c.text_secondary.mix(c.text, hover);
+    let version = format!("{} {}", tr("Version"), release.version);
+    let tip = if release.prerelease { tr("Préversion disponible") } else { tr("Mise à jour disponible") };
     let (icon, label, tooltip) = match &s.update {
-        Status::Downloading(_, f) => {
-            (progress_ring(ui, 14.0, *f, mark), i18n::with_unit(&format!("{}", (f * 100.0).floor() as u32), "%"), tip)
-        }
-        Status::Installing(_) => (spinner(ui, 14.0, mark), tr("Installation").to_string(), tip),
-        Status::Failed { error, .. } => {
-            (Node::icon("alert", m.icon, c.danger), tr("Mettre à jour").to_string(), format!("{tip} · {error}"))
-        }
-        _ => (Node::icon("update", m.icon, mark), tr("Mettre à jour").to_string(), tip),
+        Status::Downloading(_, f) => (
+            progress_ring(ui, 14.0, *f, fg),
+            i18n::with_unit(&format!("{}", (f * 100.0).floor() as u32), "%"),
+            tip.to_string(),
+        ),
+        Status::Installing(_) => (spinner(ui, 14.0, fg), tr("Installation").to_string(), tip.to_string()),
+        Status::Failed { error, .. } => (Node::icon("alert", m.icon, c.danger), version, format!("{tip} · {error}")),
+        _ => (Node::icon("update", m.icon, fg), version, tip.to_string()),
     };
-    let bg = if ui.pressed(id) { c.surface_active } else { c.raised.mix(c.raised_hover, hover) };
+    let bg = if ui.pressed(id) { c.surface_active } else { c.raised.mul_alpha(hover) };
     Some(
         Node::row()
             .id(id)
             .tooltip(&tooltip)
             .height(Size::Px(m.control_height))
             .padding(Edges::xy(10.0, 0.0))
-            .gap(6.0)
+            .gap(7.0)
             .radius(m.radius_control)
             .bg(bg)
-            .border(1.0, c.border_strong.mix(c.text_tertiary, hover))
+            .border(1.0, c.border.mix(c.border_strong, hover))
             .child(icon)
-            .child(Node::text(label, TextStyle::new(m.font_size, Weight::Medium), c.text)),
+            .child(Node::text(label, TextStyle::new(m.font_size, Weight::Medium), fg)),
     )
+}
+
+/// Confirmation sous le bouton de mise à jour : « Installer Obview 3D x.y.z et redémarrer ? » (D-39).
+fn update_popup(ui: &mut Ui, s: &mut AppState) {
+    use crate::update::Status;
+    let bid = Id::new("mise à jour");
+    if ui.clicked(bid) && matches!(s.update, Status::Available(_) | Status::Failed { release: Some(_), .. }) {
+        ui.toggle_popup(bid);
+    }
+    let Some(release) = s.update.release().cloned() else { return };
+    if !ui.popup_open(bid) {
+        return;
+    }
+    let pid = Id::new("mise à jour confirmation");
+    if ui.clicked(pid.with("annuler")) {
+        ui.close_popup();
+        return;
+    }
+    if ui.clicked(pid.with("installer")) {
+        s.update_request = Some(crate::update::Action::Install);
+        ui.close_popup();
+        ui.keep_animating();
+        return;
+    }
+    let Some(r) = ui.rect_of(bid) else { return };
+    let c = ui.theme.color.clone();
+    let m = ui.theme.size.clone();
+    let w = 360.0;
+    let appear = ui.appear(pid, 120.0);
+    let question = if i18n::is_fr() {
+        format!("Installer Obview 3D {} et redémarrer ?", release.version)
+    } else {
+        format!("Install Obview 3D {} and restart?", release.version)
+    };
+    let card = Node::column()
+        .anchor(Anchor {
+            left: Some((r.max.x - w).max(8.0)),
+            top: Some(r.max.y + 8.0 - (1.0 - appear) * 4.0),
+            ..Default::default()
+        })
+        .opacity(appear)
+        .width(Size::Px(w))
+        .padding(Edges { left: 20.0, right: 16.0, top: 18.0, bottom: 16.0 })
+        .gap(16.0)
+        .radius(m.radius_panel)
+        .bg(c.raised)
+        .border(1.0, c.border_strong)
+        .shadow(40.0, vec2(0.0, 16.0), c.shadow)
+        .child(Node::text(question, TextStyle::new(13.5, Weight::Medium), c.text).width(Size::Fill(1.0)))
+        .child(
+            Node::row()
+                .width(Size::Fill(1.0))
+                .gap(8.0)
+                .child(Node::spacer())
+                .child(widgets::button(
+                    ui,
+                    pid.with("annuler"),
+                    tr("Annuler"),
+                    None,
+                    ButtonKind::Secondary,
+                    tr("Plus tard"),
+                ))
+                .child(widgets::button(
+                    ui,
+                    pid.with("installer"),
+                    tr("Installer et redémarrer"),
+                    None,
+                    ButtonKind::Primary,
+                    tr("Télécharger, installer puis relancer Obview 3D"),
+                )),
+        );
+    ui.overlay(Node::stack().child(card), obv_ui::Layer::Popup);
 }
 
 /// Bouton des vues (standard et enregistrées), dans le coin haut droit de la vue (D-33).
@@ -817,6 +891,7 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     // Activité longue : ligne de 2 px en haut de la fenêtre (charte).
     let root = Node::stack().fill().child(column).children(crate::loading::top_line(ui, s));
     views_popup(ui, s);
+    update_popup(ui, s);
     crate::recent::popup(ui, s);
     settings_ui::dialog(ui, s);
     convert_ui::dialog(ui, s);
@@ -878,11 +953,10 @@ fn handle_grips(ui: &mut Ui, s: &mut AppState) {
 pub fn handle(ui: &mut Ui, s: &mut AppState) {
     crate::lang::init();
     i18n::set_lang(s.settings.language.lang());
-    // Mise à jour (D-32) : télécharger et installer, réessayer après un échec ; rien pendant le téléchargement.
-    if ui.clicked(Id::new("mise à jour"))
-        && matches!(s.update, crate::update::Status::Available(_) | crate::update::Status::Failed { .. })
-    {
-        s.update_request = Some(crate::update::Action::Install);
+    // Mise à jour (D-39) : le clic sur le bouton ouvre la confirmation (`update_popup`) ; sans fichier à
+    // installer, après un échec de la recherche, il relance la recherche.
+    if ui.clicked(Id::new("mise à jour")) && matches!(s.update, crate::update::Status::Failed { release: None, .. }) {
+        s.update_request = Some(crate::update::Action::Check);
         ui.keep_animating();
     }
     if ui.clicked(Id::new("thème")) {

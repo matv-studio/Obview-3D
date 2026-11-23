@@ -343,7 +343,8 @@ fn display(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     ]
 }
 
-/// Mises à jour (D-32) : version installée, recherche au démarrage, état et commandes de la dernière version.
+/// Mises à jour (D-32, D-39) : version installée, état de la dernière version, recherche automatique,
+/// préversions, recherche à la demande.
 fn updates(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     use crate::update::{Action, Status};
     let c = ui.theme.color.clone();
@@ -352,6 +353,14 @@ fn updates(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     if let Some(v) = changed {
         s.settings.check_updates = v;
         s.settings_dirty = true;
+    }
+    let (pre, changed) = controls::toggle(ui, id("maj préversions"), s.settings.prereleases);
+    if let Some(v) = changed {
+        s.settings.prereleases = v;
+        s.settings_dirty = true;
+        // Le choix change la version proposée : nouvelle recherche.
+        s.update_request = Some(Action::Check);
+        ui.keep_animating();
     }
     let mut request = |ui: &mut Ui, name: &str, action: Action| {
         if ui.clicked(id(name)) {
@@ -362,30 +371,22 @@ fn updates(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     request(ui, "maj vérifier", Action::Check);
     request(ui, "maj installer", Action::Install);
     request(ui, "maj notes", Action::OpenPage);
-    let check = |ui: &mut Ui, label: &str| {
-        widgets::button(
-            ui,
-            id("maj vérifier"),
-            label,
-            Some("reset"),
-            ButtonKind::Secondary,
-            tr("Rechercher une version"),
-        )
-    };
+    let busy = matches!(s.update, Status::Checking { .. } | Status::Downloading(..) | Status::Installing(_));
     let mut state = Node::row().gap(10.0);
     match &s.update {
-        Status::Idle => state.push(check(ui, tr("Vérifier"))),
+        Status::Idle => state.push(muted("—".into())),
         Status::Current => {
             state.push(Node::icon("check", 14.0, c.success));
             state.push(muted(tr("À jour").into()));
-            state.push(check(ui, tr("Vérifier")));
         }
         Status::Checking { .. } => {
             state.push(crate::shell::spinner(ui, 14.0, c.text_secondary));
             state.push(muted(tr("Vérification").into()));
         }
         Status::Available(r) => {
-            state.push(muted(r.version.to_string()));
+            let v =
+                if r.prerelease { format!("{} · {}", r.version, tr("préversion")) } else { r.version.to_string() };
+            state.push(muted(v));
             state.push(widgets::button(
                 ui,
                 id("maj notes"),
@@ -397,7 +398,7 @@ fn updates(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
             state.push(widgets::button(
                 ui,
                 id("maj installer"),
-                tr("Mettre à jour"),
+                tr("Installer et redémarrer"),
                 Some("update"),
                 ButtonKind::Primary,
                 &format!("Obview 3D {}", r.version),
@@ -427,19 +428,38 @@ fn updates(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
                     ButtonKind::Secondary,
                     error,
                 ));
-            } else {
-                state.push(check(ui, tr("Réessayer")));
             }
         }
+    }
+    let mut check = widgets::button(
+        ui,
+        id("maj vérifier"),
+        tr("Rechercher les mises à jour"),
+        Some("reset"),
+        ButtonKind::Secondary,
+        tr("Interroger GitHub maintenant"),
+    );
+    if busy {
+        check = check.opacity(0.5);
     }
     vec![
         section_title(ui, "Obview 3D"),
         card(
             ui,
             vec![
-                setting_row(ui, tr("Version"), muted(s.app_version.to_string())),
+                setting_row(ui, tr("Version installée"), muted(s.app_version.to_string())),
                 setting_row(ui, tr("Dernière version"), state),
-                setting_row(ui, tr("Rechercher au démarrage"), auto),
+                setting_row(
+                    ui,
+                    tr("Rechercher automatiquement"),
+                    auto.tooltip(tr("Au démarrage, puis toutes les six heures")),
+                ),
+                setting_row(
+                    ui,
+                    tr("Recevoir les préversions"),
+                    pre.tooltip(tr("Versions d'essai, avant leur publication")),
+                ),
+                Node::row().width(Size::Fill(1.0)).height(Size::Px(56.0)).padding(Edges::xy(14.0, 0.0)).child(check),
             ],
         ),
     ]

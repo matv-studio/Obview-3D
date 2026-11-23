@@ -391,10 +391,11 @@ fn release() -> obview::update::Release {
             size: 1,
             sha256: None,
         }),
+        prerelease: false,
     }
 }
 
-/// Mises à jour (D-32) : réglages avec une version proposée (bouton survolé), barre du haut pendant le
+/// Mises à jour (D-32, D-39) : réglages avec une version proposée (bouton survolé), barre du haut pendant le
 /// téléchargement, après un échec.
 #[test]
 fn mises_a_jour_deux_themes() {
@@ -420,6 +421,15 @@ fn mises_a_jour_deux_themes() {
         ..Default::default()
     };
     shoot(&gpu, &model, &both(available, "maj_barre_sombre", "maj_barre_claire"));
+    // Confirmation sous le bouton (D-39).
+    static CLICK: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("mise à jour")]);
+    let confirm = Shot {
+        setup: |s| s.update = Status::Available(release()),
+        clicks: &*CLICK,
+        hover: Some(Id::new("mise à jour confirmation").with("installer")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(confirm, "maj_confirmation_sombre", "maj_confirmation_claire"));
     let downloading = Shot { setup: |s| s.update = Status::Downloading(release(), 0.42), ..Default::default() };
     shoot(&gpu, &model, &both(downloading, "maj_telechargement_sombre", "maj_telechargement_claire"));
     let current = Shot {

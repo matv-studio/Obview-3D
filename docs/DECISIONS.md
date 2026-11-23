@@ -592,3 +592,21 @@ Suite des cinq points validés le 17/11 (export en assemblage : D-35), maquette 
 
 En suspens : une pièce vue seulement par une ouverture étroite peut être manquée par les 128 directions ; aperçu
 des pièces retirées avant l'export.
+
+## D-39 · Mises à jour : bouton de version, confirmation, préversions ; version 0.3.1 (23/11/2026)
+
+Demande : reprendre le fonctionnement de Revel (captures de l'utilisateur). La fonction existait (D-32) ; elle est
+alignée plutôt que dupliquée.
+
+- Barre du haut : « Version x.y.z » avec l'icône de téléchargement, discret (texte secondaire, bord fin), seulement
+  quand une version plus récente est publiée ; info-bulle « Mise à jour disponible » ou « Préversion disponible ».
+  Un clic ouvre sous le bouton « Installer Obview 3D x.y.z et redémarrer ? » (Annuler, Installer et redémarrer) ;
+  le téléchargement montre son avancement dans le bouton (D-32).
+- Réglages › Mises à jour : version installée, dernière version, « Rechercher automatiquement » (au démarrage, puis
+  toutes les six heures tant que l'application reste ouverte ; avant : une fois par jour au démarrage),
+  « Recevoir les préversions », « Rechercher les mises à jour ».
+- Préversions : la liste `releases` est lue et la plus haute version retenue (brouillons exclus) ; sinon
+  `releases/latest`, qui ignore les préversions. Constat : v0.2.1 et v0.3.0 ont été publiées comme préversions,
+  donc invisibles pour l'ancien code ; une copie 0.3.0 ne verra 0.3.1 que si celle-ci est publiée comme version
+  normale.
+- Numéro 0.3.1 : une v0.3.0 était déjà publiée le 10/11.
