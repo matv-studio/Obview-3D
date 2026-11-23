@@ -586,6 +586,14 @@ fn conversion_deux_themes() {
         ..Default::default()
     };
     shoot(&gpu, &model, &both(idle, "conversion_sombre", "conversion_claire"));
+    // Options des pièces (D-38) : info-bulle de « Retirer les pièces cachées ».
+    let hidden = Shot {
+        setup: |s| s.convert.open = true,
+        hover: Some(Id::new("convertir").with("cachées")),
+        tooltip: Some(Id::new("convertir").with("cachées")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(hidden, "conversion_pieces_sombre", "conversion_pieces_claire"));
     // Info-bulles des choix, choix conseillé entre parenthèses.
     let format = Shot {
         setup: |s| s.convert.open = true,

@@ -644,14 +644,21 @@ impl App {
         let (tx, rx) = channel();
         let progress = Arc::new(AtomicU32::new(0));
         let (model, proxy, prog) = (self.model.clone(), self.proxy.clone(), progress.clone());
+        // Pièces de départ et filtres (D-38).
+        let base = self.state.convert.base_parts(&self.state.parts, self.state.selected);
+        let filter = self.state.convert.filter();
+        // CAO : nouveau maillage du modèle exact, flèche de la moitié de l'écart et angle choisi (D-38).
+        let source = (crate::convert_ui::is_cad(&self.state.file_name) && !self.file_key.is_empty())
+            .then(|| (PathBuf::from(&self.file_key), self.state.convert.max_angle_deg));
         std::thread::spawn(move || {
             let p2 = proxy.clone();
-            let r = obv_mesh::convert(&model, &path, opts, &|f| {
+            let report = |f: f32| {
                 prog.store(f.to_bits(), Ordering::Relaxed);
                 let _ = p2.send_event(Wake);
-            })
-            .map(|r| (r, path))
-            .map_err(|e| e.to_string());
+            };
+            let r = convert_job(&model, source, &base, filter, &path, opts, &report)
+                .map(|r| (r, path))
+                .map_err(|e| e.to_string());
             let _ = tx.send(r);
             let _ = proxy.send_event(Wake);
         });
@@ -1054,6 +1061,59 @@ fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Travail de conversion (fil séparé) : nouveau maillage de la CAO s'il y a lieu, choix des pièces, puis
+/// simplification et écriture (D-35, D-38).
+fn convert_job(
+    model: &Model,
+    source: Option<(PathBuf, f64)>,
+    base: &[bool],
+    filter: obv_mesh::PartFilter,
+    path: &std::path::Path,
+    mut opts: obv_mesh::ConvertOptions,
+    report: &(dyn Fn(f32) + Sync),
+) -> Result<obv_mesh::Report, String> {
+    let mut start = 0.0f32;
+    let mut fresh = None;
+    if let Some((src, angle)) = source {
+        let options = obv_cad::Options {
+            angular: angle.to_radians(),
+            absolute_m: (opts.tolerance_m > 0.0).then_some(opts.tolerance_m * 0.5),
+            ..Default::default()
+        };
+        let p = Progress::default();
+        let read = std::thread::scope(|sc| {
+            let h = sc.spawn(|| obv_cad::read_with(&src, options, &p));
+            let mut shown = 0.0f32;
+            while !h.is_finished() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if let (_, Some(f)) = p.get() {
+                    shown = shown.max(f.clamp(0.0, 1.0) * 0.4);
+                    report(shown);
+                }
+            }
+            h.join()
+        });
+        // Mêmes pièces dans le même ordre : le choix des pièces garde ses indices ; sinon, maillage d'origine.
+        if let Ok(Ok(m)) = read
+            && m.parts.len() == model.parts.len()
+        {
+            fresh = Some(m);
+            // La moitié de l'écart est prise par le maillage, l'autre reste à la simplification.
+            opts.tolerance_m *= 0.5;
+        }
+        start = 0.4;
+    }
+    let model = fresh.as_ref().unwrap_or(model);
+    let span = if filter.remove_hidden { 0.15 } else { 0.0 };
+    let keep = obv_mesh::select_parts(model, base, filter, &|f| report(start + f * span));
+    if !keep.iter().any(|k| *k) {
+        return Err(tr("Aucune pièce à convertir").into());
+    }
+    let from = start + span;
+    obv_mesh::convert_parts(model, Some(&keep), path, opts, &|f| report(from + f * (1.0 - from)))
+        .map_err(|e| e.to_string())
+}
+
 fn map_key(code: PhysicalKey, logical: &winit::keyboard::Key) -> Option<Key> {
     if let PhysicalKey::Code(c) = code {
         let numpad = match c {
@@ -1291,4 +1351,60 @@ fn window_icon() -> Option<winit::window::Icon> {
     }
     buf.truncate(info.buffer_size());
     winit::window::Icon::from_rgba(buf, info.width, info.height).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts() -> obv_mesh::ConvertOptions {
+        obv_mesh::ConvertOptions {
+            format: obv_mesh::Format::Glb,
+            tolerance_m: 2e-5,
+            keep_silhouette: true,
+            compression: obv_mesh::Compression::Quantize,
+            layout: obv_mesh::Layout::Assembly,
+        }
+    }
+
+    /// Choix des pièces (D-38) : une seule pièce gardée, puis un filtre qui ne laisse rien.
+    #[test]
+    fn conversion_avec_choix_des_pieces() {
+        let model = crate::demo::bracket();
+        let dir = std::env::temp_dir().join(format!("obv-choix-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("une.glb");
+        let mut base = vec![false; model.parts.len()];
+        base[0] = true;
+        let filter = obv_mesh::PartFilter { min_size_m: 0.0, remove_hidden: true };
+        let r = convert_job(&model, None, &base, filter, &path, opts(), &|_| {}).unwrap();
+        assert_eq!(r.parts.len(), 1);
+        assert!(r.bytes > 0 && path.exists());
+        let filter = obv_mesh::PartFilter { min_size_m: 10.0, remove_hidden: false };
+        assert!(convert_job(&model, None, &[], filter, &path, opts(), &|_| {}).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fichier local (`OBV_SAMPLE`, STEP avec `OCCT_DIR`) : nouveau maillage, pièces cachées retirées.
+    #[test]
+    #[ignore]
+    fn conversion_fichier_local() {
+        let Some(src) = std::env::var_os("OBV_SAMPLE").map(PathBuf::from) else { return };
+        let model = load(&src).unwrap();
+        let name = src.file_name().unwrap().to_string_lossy().into_owned();
+        let source = crate::convert_ui::is_cad(&name).then(|| (src.clone(), 20.0));
+        let out = std::env::temp_dir().join("obv-local.glb");
+        let filter = obv_mesh::PartFilter { min_size_m: 0.0, remove_hidden: true };
+        let t = Instant::now();
+        let r = convert_job(&model, source, &[], filter, &out, opts(), &|_| {}).unwrap();
+        eprintln!(
+            "{:.1} s : {} pièces sur {}, {} → {} triangles, {} octets",
+            t.elapsed().as_secs_f64(),
+            r.parts.len(),
+            model.parts.len(),
+            r.triangles_in(),
+            r.triangles_out(),
+            r.bytes
+        );
+    }
 }

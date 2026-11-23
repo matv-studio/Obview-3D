@@ -1,6 +1,6 @@
 # État d'Obview 3D
 
-Mis à jour : 10/11/2026.
+Mis à jour : 23/11/2026.
 
 ## Fait
 - Décisions D-01 à D-32 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
@@ -71,6 +71,14 @@ Mis à jour : 10/11/2026.
 - D-34 puis D-36 : logo « V » (sphère creusée), icônes tirées du SVG validé par `tools/icones.py`, logo en couleurs dans la barre du haut.
 - D-35 : export en assemblage (arborescence, repères de la CAO, géométries partagées ; GLB, FBX, OBJ), pièces
   gardées au choix, flèche CAO absolue ; info-bulles de la conversion avec le choix conseillé.
+- D-37 : matériaux des fichiers dans la vue (couleur, métal, rugosité, émission, textures de couleur et de
+  métal-rugosité ; Vulkan et OpenGL), sélection teintée par les paramètres de l'image ; vues de rendu de
+  Marmoset Viewer (Normales, Albédo, Réflectivité, Brillance, Topologie, vue éclairée à droite ; mêmes positions
+  et inclinaison), rubrique « Vues de rendu » des réglages, icône ////.
+- D-38 : options de Convert : angle maximal (CAO remaillée depuis le modèle exact, flèche = moitié de l'écart),
+  structure Assemblage / À plat, pièces Toutes / Visibles / Sélectionnée, pièces sous une taille ignorées,
+  pièces cachées retirées (128 vues orthographiques rendues sur le processeur ; montre STEP : 155 pièces
+  gardées sur 285, conversion complète en 28 s). Captures `conversion_pieces_*`.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
@@ -80,11 +88,10 @@ Mis à jour : 10/11/2026.
    la machine virtuelle (pas de Metal 4) ; premier essai à faire par l'utilisateur. Bascule de moteur à chaud vérifiée seulement dans les
    essais. Ensuite : réglage de la finesse du maillage STEP ; arbre d'assemblage (chemins lus, pas encore
    affichés) ; Linux à discuter.
-1. Rendu : ombres portées (ombre de contact au sol, ombres du soleil), matériaux des fichiers (couleur, métal,
-   rugosité, textures), arêtes vives et silhouettes, occlusion ambiante ; contour de la sélection.
+1. Rendu : ombres portées (ombre de contact au sol, ombres du soleil), textures normales et occlusion des
+   fichiers, occlusion ambiante ; contour de la sélection.
 2. Menu contextuel de la vue (isoler, masquer, cadrer).
-3. Géométrie en mémoire GPU locale (tampons de transfert), couleurs par pièce sans renvoi de la géométrie ;
-   textures et matériaux par plage dans la vue.
+3. Géométrie en mémoire GPU locale (tampons de transfert).
 4. Conversion : ajustement final des sommets sur la surface d'origine (formes arrondies).
 5. Grappes et niveaux de détail ; tri GPU ; mesh shaders.
 6. STEP / IGES par OpenCASCADE 8.0.1 (paquets conda-forge, pont cxx) : arbre d'assemblage, noms, couleurs,

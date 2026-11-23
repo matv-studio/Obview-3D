@@ -568,3 +568,27 @@ dernier ; un rendu choisi repousse les traits avant lui à gauche, les autres à
 
 En suspens : textures normales et occlusion (lues par les lecteurs, pas encore utilisées au rendu), ordre des
 vues réglable.
+
+## D-38 · Options de Convert : remaillage CAO, structure, choix des pièces (23/11/2026)
+
+Suite des cinq points validés le 17/11 (export en assemblage : D-35), maquette validée le 23/11.
+
+- Angle maximal (STEP, IGES seulement) : à l'export, le modèle exact est relu et remaillé avec une flèche
+  absolue de la moitié de l'écart demandé et l'angle choisi (20° par défaut, celui de la lecture) ; l'autre moitié
+  reste à la simplification, si bien que l'écart garanti vaut par rapport au modèle exact et non plus au maillage
+  d'affichage. Si la relecture donne un autre nombre de pièces, le maillage d'affichage est gardé.
+- Structure : Assemblage (défaut) ou À plat (D-35).
+- Pièces : Toutes, Visibles (défaut), Sélectionnée (grisé sans sélection).
+- Ignorer les pièces sous : diagonale de la boîte englobante en millimètres (0 : tout garder).
+- Retirer les pièces cachées (activé par défaut, maquette) : 128 directions réparties sur la sphère (spirale de
+  Fibonacci), vue orthographique 1024 × 1024 rendue sur le processeur pour chacune (tampon de profondeur et
+  d'indices) ; une pièce est gardée si elle se voit dans au moins une vue. Les pièces transparentes ne cachent
+  rien ; un triangle plus petit qu'un pixel compte par son centre. Sur le processeur plutôt que le GPU : le
+  calcul tourne dans le fil de conversion, sans dépendre du moteur de la fenêtre ; 2,5 s pour la montre GLB
+  (453 000 triangles, 2 cœurs).
+- Bilan avant conversion : « gardées / total » pour le choix et la taille ; les pièces cachées sont comptées
+  pendant la conversion.
+- Chaque option a son info-bulle avec le choix conseillé entre parenthèses.
+
+En suspens : une pièce vue seulement par une ouverture étroite peut être manquée par les 128 directions ; aperçu
+des pièces retirées avant l'export.

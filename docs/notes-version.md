@@ -32,6 +32,11 @@ Réglages › Mises à jour).
 - Bouton de la barre du bas (Ctrl + \) pour masquer ou montrer les deux panneaux ; compteur triangles et
   sommets dans la vue quand le panneau de gauche est masqué.
 - Nouveau logo.
+- Vues de rendu de Marmoset Viewer (Normals, Albedo, Reflectivity, Gloss, Topology, vue éclairée à droite),
+  choisies dans Settings › Render views ; matériaux et textures des fichiers affichés dans la vue.
+- Convert : export en assemblage (arborescence, repères, pièces répétées partagées) ou à plat ; pièces
+  exportées (toutes, visibles, sélectionnée) ; petites pièces ignorées ; pièces cachées retirées ; STEP et IGES
+  remaillés à l'export depuis le modèle exact (angle maximal réglable) ; info-bulles avec le choix conseillé.
 - Installateurs Windows, macOS et Linux ; mises à jour détectées et installées depuis l'application (empreinte
   SHA-256 vérifiée), recherche au démarrage au plus une fois par jour, désactivable.
 - Thème sombre par défaut, barre de titre de la fenêtre comprise.

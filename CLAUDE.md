@@ -135,5 +135,8 @@ Dépôt
   `OBV_UPDATE_REFERENCE=1` pour les réécrire) ; fichier local à l'échelle 2 :
   `OBV_SAMPLE=<fichier> OBV_SELECT=<n> cargo test -p obview --test shell captures_fichier_local -- --ignored`
   (tout format lisible, STEP compris avec `OCCT_DIR`).
+  `OBV_INSPECTOR=bands` (ou la clé d'un rendu : `gloss`, `albedo`…) pour les vues de rendu, `OBV_GL=1` pour le
+  moteur OpenGL. Conversion d'un fichier local avec les options de D-38 :
+  `OBV_SAMPLE=<fichier> cargo test -p obview --lib conversion_fichier_local -- --ignored --nocapture`.
   Images dans `target/tmp/rendus/`.
   Autre taille : `OBV_SIZE=2560x1440 OBV_SCALE=1 OBV_PANELS=1`.

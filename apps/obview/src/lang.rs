@@ -113,6 +113,36 @@ pub const EN: &[(&str, &str)] = &[
     ("Transparence additive", "Additive transparency"),
     ("Arêtes vives et contours", "Sharp edges and outlines"),
     ("Au moins une vue", "At least one view"),
+    ("Aucune pièce à convertir", "No part to convert"),
+    ("Angle maximal", "Max angle"),
+    (
+        "Angle maximal entre deux facettes voisines, le modèle exact étant remaillé : plus petit, courbes plus lisses et plus de triangles (conseillé : 20°)",
+        "Largest angle between neighbouring facets, the exact model being remeshed: smaller gives smoother curves and more triangles (recommended: 20°)",
+    ),
+    ("Assemblage", "Assembly"),
+    ("À plat", "Flat"),
+    ("Structure", "Structure"),
+    ("Toutes", "All"),
+    ("Visibles", "Visible"),
+    ("Sélectionnée", "Selection"),
+    ("Ignorer les pièces sous", "Skip parts under"),
+    (
+        "Pièces plus petites que cette taille (diagonale) retirées : vis, ressorts, détails (conseillé : 0, tout garder)",
+        "Parts smaller than this size (diagonal) are left out: screws, springs, details (recommended: 0, keep everything)",
+    ),
+    ("Retirer les pièces cachées", "Remove hidden parts"),
+    (
+        "Pièces invisibles de l'extérieur sous tous les angles retirées, mécanismes internes compris (conseillé : activé)",
+        "Parts not visible from outside at any angle are left out, internal mechanisms included (recommended: on)",
+    ),
+    (
+        "Arborescence, repères et pièces répétées partagées gardés : fichier plus léger, ouvert par sous-ensembles (conseillé)",
+        "Hierarchy, pivots and shared repeated parts kept: lighter file, opened by sub-assembly (recommended)",
+    ),
+    ("Une pièce par objet, déjà placée, sans arborescence", "One object per part, already placed, no hierarchy"),
+    ("Toutes les pièces, masquées comprises", "All parts, hidden ones included"),
+    ("Pièces affichées seulement (conseillé)", "Shown parts only (recommended)"),
+    ("Pièce sélectionnée seulement", "Selected part only"),
     ("Vues affichées", "Shown views"),
     ("Toutes les vues", "All views"),
     ("triangles", "triangles"),
@@ -347,6 +377,11 @@ pub const EN: &[(&str, &str)] = &[
 /// Textes passés à `tr` par une variable (non relevés par l'essai de complétude) : listés ici pour être vérifiés.
 #[cfg(test)]
 const INDIRECT: &[&str] = &[
+    "Arborescence, repères et pièces répétées partagées gardés : fichier plus léger, ouvert par sous-ensembles (conseillé)",
+    "Une pièce par objet, déjà placée, sans arborescence",
+    "Toutes les pièces, masquées comprises",
+    "Pièces affichées seulement (conseillé)",
+    "Pièce sélectionnée seulement",
     "Neutre",
     "Chaud",
     "Froid",

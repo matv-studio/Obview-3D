@@ -33,6 +33,16 @@ pub struct ConvertState {
     pub compression: Compression,
     /// Arbre d'assemblage ou pièces à plat (D-35).
     pub layout: obv_mesh::Layout,
+    /// CAO : angle maximal entre facettes voisines du nouveau maillage, en degrés (D-38).
+    pub max_angle_deg: f64,
+    pub max_angle_text: String,
+    /// Pièces exportées (D-38).
+    pub scope: PartScope,
+    /// Pièces plus petites (diagonale, millimètres) retirées ; 0 : toutes gardées.
+    pub min_size_mm: f64,
+    pub min_size_text: String,
+    /// Pièces invisibles de l'extérieur retirées.
+    pub remove_hidden: bool,
     /// L'écart a été initialisé pour le modèle ouvert.
     pub initialized: bool,
     pub status: Status,
@@ -49,10 +59,53 @@ impl Default for ConvertState {
             keep_silhouette: true,
             compression: Compression::Quantize,
             layout: obv_mesh::Layout::Assembly,
+            max_angle_deg: DEFAULT_ANGLE_DEG,
+            max_angle_text: fmt_mm(DEFAULT_ANGLE_DEG),
+            scope: PartScope::Visible,
+            min_size_mm: 0.0,
+            min_size_text: "0".into(),
+            remove_hidden: true,
             initialized: false,
             status: Status::Idle,
         }
     }
+}
+
+/// Angle maximal par défaut du maillage de la CAO, en degrés (celui de la lecture, `obv_cad::Options`).
+pub const DEFAULT_ANGLE_DEG: f64 = 20.0;
+
+/// Pièces exportées (D-38).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartScope {
+    All,
+    Visible,
+    Selection,
+}
+
+impl PartScope {
+    pub const ALL: [PartScope; 3] = [PartScope::All, PartScope::Visible, PartScope::Selection];
+}
+
+impl ConvertState {
+    /// Pièces de départ selon le choix « Pièces » (avant les filtres de taille et de visibilité).
+    pub fn base_parts(&self, s_parts: &[crate::shell::PartInfo], selected: Option<usize>) -> Vec<bool> {
+        match (self.scope, selected) {
+            (PartScope::All, _) => vec![true; s_parts.len()],
+            (PartScope::Selection, Some(k)) => (0..s_parts.len()).map(|i| i == k).collect(),
+            _ => s_parts.iter().map(|p| p.visible).collect(),
+        }
+    }
+
+    /// Filtres de taille et de visibilité.
+    pub fn filter(&self) -> obv_mesh::PartFilter {
+        obv_mesh::PartFilter { min_size_m: self.min_size_mm / 1000.0, remove_hidden: self.remove_hidden }
+    }
+}
+
+/// Le fichier ouvert est-il de la CAO (STEP, IGES), donc remaillable à l'export ?
+pub fn is_cad(file_name: &str) -> bool {
+    let ext = std::path::Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    obv_cad::EXTENSIONS.contains(&ext.as_str())
 }
 
 /// Demandes adressées à la fenêtre de l'application (qui possède le modèle et les fils de travail).
@@ -230,6 +283,39 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
             )))
             .child(Node::text("mm", TextStyle::new(13.0, Weight::Regular), c.text_secondary)),
     ));
+    // CAO : nouveau maillage du modèle exact à l'export (D-38).
+    let cad = is_cad(&s.file_name);
+    if cad {
+        let (angle, changed) = controls::text_input(
+            ui,
+            TextInput {
+                id: id("angle"),
+                placeholder: "20",
+                width: Size::Px(96.0),
+                icon: None,
+                hint: None,
+                clearable: false,
+            },
+            &mut s.convert.max_angle_text,
+        );
+        if changed
+            && let Ok(v) = s.convert.max_angle_text.replace(',', ".").trim().parse::<f64>()
+            && (1.0..=90.0).contains(&v)
+        {
+            s.convert.max_angle_deg = v;
+            s.convert.status = Status::Idle;
+        }
+        body.push(row(
+            ui,
+            tr("Angle maximal"),
+            Node::row()
+                .gap(8.0)
+                .child(angle.tooltip(tr(
+                    "Angle maximal entre deux facettes voisines, le modèle exact étant remaillé : plus petit, courbes plus lisses et plus de triangles (conseillé : 20°)",
+                )))
+                .child(Node::text("°", TextStyle::new(13.0, Weight::Regular), c.text_secondary).width(Size::Px(22.0))),
+        ));
+    }
     let (sil, toggled) = controls::toggle(ui, id("silhouette"), s.convert.keep_silhouette);
     if let Some(v) = toggled
         && !running
@@ -241,6 +327,96 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         ui,
         tr("Silhouette"),
         sil.tooltip(tr("Arêtes vives et contours plus fidèles, au prix de quelques triangles (conseillé : activé)")),
+    ));
+    body.push(widgets::divider(ui));
+
+    // Structure et choix des pièces (D-35, D-38).
+    let labels = [tr("Assemblage"), tr("À plat")];
+    let layouts = [obv_mesh::Layout::Assembly, obv_mesh::Layout::Flat];
+    let cur = layouts.iter().position(|l| *l == s.convert.layout).unwrap_or(0);
+    let (mut structure, picked) = crate::tools::segmented(ui, id("structure"), &labels, cur);
+    if let Some(i) = picked
+        && !running
+    {
+        s.convert.layout = layouts[i];
+        s.convert.status = Status::Idle;
+    }
+    let tips = [
+        "Arborescence, repères et pièces répétées partagées gardés : fichier plus léger, ouvert par sous-ensembles (conseillé)",
+        "Une pièce par objet, déjà placée, sans arborescence",
+    ];
+    for (child, t) in structure.children.iter_mut().zip(tips) {
+        child.tooltip = Some(obv_ui::Tooltip { text: tr(t).into(), shortcut: None });
+    }
+    body.push(row(ui, tr("Structure"), structure.width(Size::Px(190.0))));
+    let labels = [tr("Toutes"), tr("Visibles"), tr("Sélectionnée")];
+    let cur = PartScope::ALL.iter().position(|p| *p == s.convert.scope).unwrap_or(1);
+    let (mut scope, picked) = crate::tools::segmented(ui, id("pièces"), &labels, cur);
+    if let Some(i) = picked
+        && !running
+        && (PartScope::ALL[i] != PartScope::Selection || s.selected.is_some())
+    {
+        s.convert.scope = PartScope::ALL[i];
+        s.convert.status = Status::Idle;
+    }
+    if s.convert.scope == PartScope::Selection && s.selected.is_none() {
+        s.convert.scope = PartScope::Visible;
+    }
+    let tips = [
+        "Toutes les pièces, masquées comprises",
+        "Pièces affichées seulement (conseillé)",
+        "Pièce sélectionnée seulement",
+    ];
+    for (k, (child, t)) in scope.children.iter_mut().zip(tips).enumerate() {
+        child.tooltip = Some(obv_ui::Tooltip { text: tr(t).into(), shortcut: None });
+        if k == 2 && s.selected.is_none() {
+            child.style.opacity = 0.4;
+        }
+    }
+    body.push(row(ui, tr("Pièces"), scope.width(Size::Px(240.0))));
+    let (min_input, changed) = controls::text_input(
+        ui,
+        TextInput {
+            id: id("taille min"),
+            placeholder: "0",
+            width: Size::Px(96.0),
+            icon: None,
+            hint: None,
+            clearable: false,
+        },
+        &mut s.convert.min_size_text,
+    );
+    if changed
+        && let Ok(v) = s.convert.min_size_text.replace(',', ".").trim().parse::<f64>()
+        && v >= 0.0
+        && v.is_finite()
+    {
+        s.convert.min_size_mm = v;
+        s.convert.status = Status::Idle;
+    }
+    body.push(row(
+        ui,
+        tr("Ignorer les pièces sous"),
+        Node::row()
+            .gap(8.0)
+            .child(min_input.tooltip(tr(
+                "Pièces plus petites que cette taille (diagonale) retirées : vis, ressorts, détails (conseillé : 0, tout garder)",
+            )))
+            .child(Node::text("mm", TextStyle::new(13.0, Weight::Regular), c.text_secondary)),
+    ));
+    let (hidden, toggled) = controls::toggle(ui, id("cachées"), s.convert.remove_hidden);
+    if let Some(v) = toggled
+        && !running
+    {
+        s.convert.remove_hidden = v;
+        s.convert.status = Status::Idle;
+    }
+    body.push(row(
+        ui,
+        tr("Retirer les pièces cachées"),
+        hidden.tooltip(tr(
+            "Pièces invisibles de l'extérieur sous tous les angles retirées, mécanismes internes compris (conseillé : activé)",
+        )),
     ));
     if s.convert.format == Format::Glb {
         // Choix proposés par cette construction (Draco seulement si la bibliothèque est liée).
@@ -316,7 +492,30 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                 Node::row()
                     .width(Size::Fill(1.0))
                     .gap(10.0)
-                    .child(stat(ui, tr("Pièces"), group(s.parts.len()), false))
+                    .child(stat(
+                        ui,
+                        tr("Pièces"),
+                        {
+                            // Pièces gardées par le choix et la taille ; les cachées sont comptées à la conversion.
+                            let base = s.convert.base_parts(&s.parts, s.selected);
+                            let min = s.convert.min_size_mm / 1000.0;
+                            let kept = s
+                                .parts
+                                .iter()
+                                .zip(&base)
+                                .filter(|(p, k)| {
+                                    let d = p.size.iter().map(|v| (*v as f64).powi(2)).sum::<f64>().sqrt() * s.unit_m;
+                                    **k && d >= min
+                                })
+                                .count();
+                            if kept == s.parts.len() {
+                                group(kept)
+                            } else {
+                                format!("{} / {}", group(kept), group(s.parts.len()))
+                            }
+                        },
+                        false,
+                    ))
                     .child(stat(ui, tr("Triangles"), compact(tri_in), false))
                     .child(stat(
                         ui,
@@ -399,7 +598,10 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         footer.push(b);
     }
     let body = Node::column().align(Align::Stretch).child(body);
-    let (node, close) = controls::modal(ui, Id::new("convertir"), tr("Convertir"), (640.0, 482.0), body, footer);
+    // Hauteur : en-tête, lignes de 52 px, séparateurs, bilan, pied.
+    let rows = 8 + cad as usize + (s.convert.format == Format::Glb) as usize;
+    let height = 482.0 + 52.0 * (rows as f32 - 5.0) + 1.0;
+    let (node, close) = controls::modal(ui, Id::new("convertir"), tr("Convertir"), (640.0, height), body, footer);
     if close && !running {
         s.convert.open = false;
     }

@@ -7,6 +7,7 @@
 
 pub mod bvh;
 pub mod optimize;
+pub mod visibility;
 pub mod write;
 
 use std::{
@@ -264,6 +265,50 @@ pub fn convert(
     progress: &(dyn Fn(f32) + Sync),
 ) -> std::io::Result<Report> {
     convert_parts(model, None, path, opts, progress)
+}
+
+/// Filtre des pièces exportées (D-38).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PartFilter {
+    /// Pièces dont la diagonale de la boîte englobante est plus petite (mètres) : retirées.
+    pub min_size_m: f64,
+    /// Pièces invisibles de l'extérieur, quelle que soit la direction : retirées.
+    pub remove_hidden: bool,
+}
+
+/// Diagonale de la boîte englobante de chaque pièce, en mètres.
+pub fn part_sizes_m(model: &Model) -> Vec<f64> {
+    model
+        .parts
+        .iter()
+        .map(|p| {
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for v in &p.mesh.positions {
+                for a in 0..3 {
+                    lo[a] = lo[a].min(v[a]);
+                    hi[a] = hi[a].max(v[a]);
+                }
+            }
+            if p.mesh.positions.is_empty() {
+                return 0.0;
+            }
+            (0..3).map(|a| ((hi[a] - lo[a]) as f64).powi(2)).sum::<f64>().sqrt() * model.unit_m
+        })
+        .collect()
+}
+
+/// Pièces gardées : `base` (une valeur par pièce, vide : toutes), moins les petites et les cachées.
+pub fn select_parts(model: &Model, base: &[bool], filter: PartFilter, progress: &(dyn Fn(f32) + Sync)) -> Vec<bool> {
+    let mut keep: Vec<bool> = (0..model.parts.len()).map(|i| base.get(i).copied().unwrap_or(true)).collect();
+    if filter.min_size_m > 0.0 {
+        for (k, size) in keep.iter_mut().zip(part_sizes_m(model)) {
+            *k &= size >= filter.min_size_m;
+        }
+    }
+    if filter.remove_hidden {
+        keep = visibility::visible_parts(model, &keep, progress);
+    }
+    keep
 }
 
 /// Comme [`convert`], pour les pièces gardées par `keep` (une valeur par pièce) seulement.
