@@ -46,6 +46,19 @@ pub mod bridge {
         normals: Vec<f32>,
         indices: Vec<u32>,
         groups: Vec<CadGroup>,
+        /// Nœud de l'instance dans `CadResult::nodes` (sa transformation globale est celle des positions).
+        node: u32,
+        /// Forme de référence : les pièces de même prototype ont la même géométrie à leur transformation près.
+        proto: u32,
+    }
+
+    /// Nœud de l'arbre d'assemblage (D-35).
+    struct CadNode {
+        name: String,
+        /// Indice du parent, -1 pour une racine.
+        parent: i32,
+        /// Transformation relative au parent : matrice 3 × 4 par lignes (rotation, échelle, translation).
+        local: [f64; 12],
     }
 
     /// Réglages du maillage des surfaces exactes.
@@ -54,10 +67,14 @@ pub mod bridge {
         linear: f64,
         /// Écart angulaire maximal entre deux normales voisines (radians).
         angular: f64,
+        /// Flèche absolue en mètres ; 0 : `linear` s'applique.
+        absolute: f64,
     }
 
     struct CadResult {
         parts: Vec<CadPart>,
+        /// Arbre d'assemblage, parents avant enfants.
+        nodes: Vec<CadNode>,
         /// Mètres par unité des coordonnées.
         unit_m: f64,
         /// Vide : lecture réussie.

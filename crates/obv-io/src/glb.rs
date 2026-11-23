@@ -9,25 +9,13 @@ use base64::Engine;
 use rayon::prelude::*;
 use serde_json::Value;
 
-use crate::{Material, Mesh, Model, Part, ReadError, SubMesh, Texture};
+use crate::{Material, Mesh, Model, Node, Part, Placement, ReadError, SubMesh, Texture};
 
 fn invalid(m: impl Into<String>) -> ReadError {
     ReadError::Invalid(m.into())
 }
 
-type Mat4 = [f64; 16];
-
-const IDENTITY: Mat4 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
-
-fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
-    let mut r = [0.0; 16];
-    for c in 0..4 {
-        for row in 0..4 {
-            r[c * 4 + row] = (0..4).map(|k| a[k * 4 + row] * b[c * 4 + k]).sum();
-        }
-    }
-    r
-}
+use crate::scene::{IDENTITY, Mat4, mul};
 
 fn node_matrix(n: &Value) -> Mat4 {
     if let Some(m) = n.get("matrix").and_then(Value::as_array) {
@@ -361,40 +349,48 @@ pub fn read_glb(path: &Path) -> Result<Model, ReadError> {
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_u64().map(|v| v as usize)).collect())
         .unwrap_or_default();
-    let mut todo: Vec<(usize, Mat4)> = roots.into_iter().map(|r| (r, IDENTITY)).collect();
+    // Arbre gardé pour l'export (D-35) : un nœud par nœud parcouru, parents avant enfants.
+    let mut todo: Vec<(usize, Mat4, Option<u32>)> = roots.into_iter().map(|r| (r, IDENTITY, None)).collect();
     let mut instances = Vec::new();
+    let mut nodes: Vec<Node> = Vec::new();
     let mut guard = 0usize;
-    while let Some((ni, parent)) = todo.pop() {
+    while let Some((ni, parent, parent_node)) = todo.pop() {
         guard += 1;
         if guard > 1_000_000 {
             return Err(invalid("graphe de nœuds cyclique"));
         }
         let n = &doc.json["nodes"][ni];
-        let m = mul(&parent, &node_matrix(n));
+        let local = node_matrix(n);
+        let m = mul(&parent, &local);
+        let here = nodes.len() as u32;
+        nodes.push(Node { name: n["name"].as_str().unwrap_or("").to_owned(), parent: parent_node, local });
         if let Some(mi) = n["mesh"].as_u64() {
             let name =
                 n["name"].as_str().or_else(|| doc.json["meshes"][mi as usize]["name"].as_str()).map(str::to_owned);
-            instances.push((mi as usize, m, name));
+            instances.push((mi as usize, m, name, here));
         }
         if let Some(children) = n["children"].as_array() {
             for c in children.iter().rev() {
                 if let Some(c) = c.as_u64() {
-                    todo.push((c as usize, m));
+                    todo.push((c as usize, m, Some(here)));
                 }
             }
         }
     }
-    instances.sort_by_key(|(mi, _, _)| *mi);
+    instances.sort_by_key(|(mi, _, _, _)| *mi);
     // Sans nom dans le fichier : numérotation dans l'ordre des maillages du fichier.
-    let instances: Vec<(usize, Mat4, String)> = instances
+    let instances: Vec<(usize, Mat4, String, u32)> = instances
         .into_iter()
         .enumerate()
-        .map(|(k, (mi, m, name))| (mi, m, name.unwrap_or_else(|| format!("Pièce {}", k + 1))))
+        .map(|(k, (mi, m, name, node))| (mi, m, name.unwrap_or_else(|| format!("Pièce {}", k + 1)), node))
         .collect();
+    // Prototype : le maillage du fichier (mêmes primitives, mêmes matériaux).
+    let placements: Vec<Placement> =
+        instances.iter().map(|(mi, _, _, node)| Placement { node: *node, proto: *mi as u32 }).collect();
 
     let parts: Result<Vec<Part>, ReadError> = instances
         .par_iter()
-        .map(|(mi, m, name)| {
+        .map(|(mi, m, name, _)| {
             let prims = doc.json["meshes"][*mi]["primitives"].as_array().cloned().unwrap_or_default();
             let meshes: Result<Vec<Mesh>, ReadError> = prims.par_iter().map(|p| doc.primitive(p, m)).collect();
             let mut mesh = Mesh::default();
@@ -404,7 +400,7 @@ pub fn read_glb(path: &Path) -> Result<Model, ReadError> {
             Ok(Part { name: name.clone(), mesh })
         })
         .collect();
-    Ok(Model { parts: parts?, unit_m: 1.0, materials, textures })
+    Ok(Model { parts: parts?, unit_m: 1.0, materials, textures, nodes, placements })
 }
 
 /// Contenu d'une adresse de tampon ou d'image : `data:…;base64,…` ou chemin relatif au fichier.

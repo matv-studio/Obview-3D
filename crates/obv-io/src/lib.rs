@@ -8,6 +8,7 @@ mod glb;
 pub mod normals;
 mod obj;
 mod progress;
+pub mod scene;
 mod stl;
 
 use std::path::Path;
@@ -16,6 +17,7 @@ pub use fbx::read_fbx;
 pub use glb::read_glb;
 pub use obj::{parse_obj, read_obj};
 pub use progress::{Progress, Stage};
+pub use scene::{Mat4, Node, Placement};
 pub use stl::{parse_stl, read_stl};
 
 /// Extensions reconnues (minuscules).
@@ -203,9 +205,18 @@ pub struct Model {
     pub unit_m: f64,
     pub materials: Vec<Material>,
     pub textures: Vec<Texture>,
+    /// Arbre d'assemblage (D-35) ; vide : pièces à plat.
+    pub nodes: Vec<Node>,
+    /// Place de chaque pièce dans l'arbre : vide, ou une entrée par pièce.
+    pub placements: Vec<Placement>,
 }
 
 impl Model {
+    /// L'arbre décrit toutes les pièces.
+    pub fn has_structure(&self) -> bool {
+        !self.nodes.is_empty() && self.placements.len() == self.parts.len()
+    }
+
     /// Couleur d'affichage d'une pièce : couleur de base de son premier matériau (sRGB 8 bits).
     pub fn display_color(&self, part: usize) -> Option<[u8; 4]> {
         let m = self.parts.get(part)?.mesh.submeshes.iter().find_map(|g| g.material)?;

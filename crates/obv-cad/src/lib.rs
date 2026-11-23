@@ -43,13 +43,15 @@ pub struct Options {
     pub linear: f64,
     /// Écart angulaire maximal entre normales voisines (radians).
     pub angular: f64,
+    /// Flèche absolue en mètres (nouveau maillage à l'export, D-35) ; remplace `linear` quand elle est donnée.
+    pub absolute_m: Option<f64>,
 }
 
 impl Default for Options {
     /// Flèche de 1/4 000 de la diagonale et 0,35 rad (20°) : silhouettes lisses, budget de triangles proche
     /// d'un export de qualité « affichage fin » des modeleurs ; la conversion simplifie ensuite à écart garanti.
     fn default() -> Self {
-        Options { linear: 2.5e-4, angular: 0.35 }
+        Options { linear: 2.5e-4, angular: 0.35, absolute_m: None }
     }
 }
 
@@ -85,7 +87,11 @@ fn read_native(path: &Path, iges: bool, options: Options, progress: &Progress) -
     let r = ffi::bridge::read_cad(
         p,
         iges,
-        &ffi::bridge::CadOptions { linear: options.linear, angular: options.angular },
+        &ffi::bridge::CadOptions {
+            linear: options.linear,
+            angular: options.angular,
+            absolute: options.absolute_m.unwrap_or(0.0),
+        },
         &ffi::CadProgress(progress),
     );
     drop(guard);
@@ -97,6 +103,34 @@ fn read_native(path: &Path, iges: bool, options: Options, progress: &Progress) -
         return Err(CadError::Read(r.error));
     }
     let mut model = Model { unit_m: r.unit_m, ..Default::default() };
+    // Arbre d'assemblage (D-35). Les positions passent de Z vers le haut à Y vers le haut par `up` (rotation R) ;
+    // chaque transformation locale L devient R·L·R⁻¹ : les transformations globales suivent les positions, et un
+    // logiciel qui revient à Z vers le haut (Blender) retrouve exactement les repères de la CAO.
+    let conj = |l: &[f64; 12]| -> [f64; 12] {
+        // R : (x, y, z) → (x, z, -y) ; R·L·R⁻¹ par permutation des lignes et colonnes.
+        let a = |r: usize, c: usize| l[r * 4 + c];
+        let rr = [(0usize, 1.0), (2, 1.0), (1, -1.0)]; // ligne i de R·M = signe · ligne src de M
+        let mut out = [0.0; 12];
+        for (i, (si, sgi)) in rr.iter().enumerate() {
+            for (j, (sj, sgj)) in rr.iter().enumerate() {
+                out[i * 4 + j] = sgi * sgj * a(*si, *sj);
+            }
+            out[i * 4 + 3] = sgi * a(*si, 3);
+        }
+        out
+    };
+    model.nodes = r
+        .nodes
+        .iter()
+        .map(|n| obv_io::Node {
+            name: n.name.clone(),
+            parent: (n.parent >= 0).then_some(n.parent as u32),
+            local: obv_io::scene::from_rows_3x4(&conj(&n.local)),
+        })
+        .collect();
+    // Prototype : forme de référence et matériaux (une même forme peut changer de couleur d'une instance à l'autre).
+    let mut protos: Vec<(u32, Vec<Option<u32>>)> = Vec::new();
+    let mut placements = Vec::with_capacity(r.parts.len());
     // Un matériau par couleur distincte.
     let mut colors: Vec<[u32; 4]> = Vec::new();
     for (k, p) in r.parts.into_iter().enumerate() {
@@ -130,9 +164,16 @@ fn read_native(path: &Path, iges: bool, options: Options, progress: &Progress) -
                 mesh.submeshes.push(SubMesh { first: g.first * 3, count: g.count * 3, material });
             }
         }
+        let key = (p.proto, mesh.submeshes.iter().map(|g| g.material).collect::<Vec<_>>());
+        let proto = protos.iter().position(|k| *k == key).unwrap_or_else(|| {
+            protos.push(key);
+            protos.len() - 1
+        });
+        placements.push(obv_io::Placement { node: p.node, proto: proto as u32 });
         let name = if p.name.is_empty() { format!("Pièce {}", k + 1) } else { p.name };
         model.parts.push(Part { name, mesh });
     }
+    model.placements = placements;
     Ok(model)
 }
 
@@ -168,6 +209,36 @@ mod tests {
         assert_eq!(names, ["Cube gauche", "Cube droit"]);
         assert_eq!(m.display_color(0), None);
         assert_eq!(m.display_color(1), Some([255, 0, 0, 255]));
+        // Arbre (D-35) : l'assemblage puis ses deux instances ; la transformation globale de chaque instance,
+        // appliquée à la géométrie de la première (ramenée dans son repère), redonne ses positions.
+        assert!(m.has_structure());
+        assert_eq!(m.nodes.iter().filter(|n| n.parent.is_none()).count(), 1, "{:?}", m.nodes);
+        let world = obv_io::scene::world_matrices(&m.nodes);
+        let (pa, pb) = (m.placements[0], m.placements[1]);
+        assert_ne!(pa.node, pb.node);
+        assert_eq!(obv_io::scene::path(&m.nodes, pb.node).split(" / ").last(), Some("Cube droit"));
+        let inv_a = obv_io::scene::inverse_affine(&world[pa.node as usize]).unwrap();
+        for (pa_p, pb_p) in m.parts[0].mesh.positions.iter().zip(&m.parts[1].mesh.positions) {
+            let local = obv_io::scene::point(&inv_a, pa_p.map(f64::from));
+            let back = obv_io::scene::point(&world[pb.node as usize], local);
+            for k in 0..3 {
+                assert!((back[k] - pb_p[k] as f64).abs() < 1e-4, "{back:?} {pb_p:?}");
+            }
+        }
+        // Couleur différente : prototypes distincts malgré la même forme.
+        assert_ne!(pa.proto, pb.proto);
+    }
+
+    #[test]
+    fn fleche_absolue_et_angle() {
+        let dir = std::env::temp_dir().join("obv-cad-essai-fleche");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("deux_cubes.step");
+        assert!(write_test(&path));
+        // Cube : maillage indépendant des réglages (12 triangles) ; on vérifie que les réglages passent.
+        let opts = Options { angular: 2f64.to_radians(), absolute_m: Some(1e-6), ..Options::default() };
+        let m = read_with(&path, opts, &Progress::default()).unwrap();
+        assert_eq!(m.parts[0].mesh.triangle_count(), 12);
     }
 
     #[test]

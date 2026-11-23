@@ -31,6 +31,8 @@ pub struct ConvertState {
     pub keep_silhouette: bool,
     /// GLB : compression des géométries (D-29).
     pub compression: Compression,
+    /// Arbre d'assemblage ou pièces à plat (D-35).
+    pub layout: obv_mesh::Layout,
     /// L'écart a été initialisé pour le modèle ouvert.
     pub initialized: bool,
     pub status: Status,
@@ -46,6 +48,7 @@ impl Default for ConvertState {
             tolerance_text: String::new(),
             keep_silhouette: true,
             compression: Compression::Quantize,
+            layout: obv_mesh::Layout::Assembly,
             initialized: false,
             status: Status::Idle,
         }
@@ -146,7 +149,20 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
     }
     let fi = Format::ALL.iter().position(|f| *f == s.convert.format).unwrap_or(0);
     let labels: Vec<&str> = Format::ALL.iter().map(|f| f.label()).collect();
-    let tabs_fmt = widgets::tabs(ui, fmt_base, &labels, fi).width(Size::Px(240.0));
+    let mut tabs_fmt = widgets::tabs(ui, fmt_base, &labels, fi).width(Size::Px(240.0));
+    // Info-bulle de chaque choix, le choix conseillé entre parenthèses.
+    let fmt_tip = |f: Format| match f {
+        Format::Glb => {
+            "Un seul fichier avec matériaux, textures et arborescence ; lu par Blender, les moteurs de jeu et le web (conseillé)"
+        }
+        Format::Obj => "Format ancien lu partout ; ni arborescence ni repères, matériaux simples dans un .mtl à côté",
+        Format::Fbx => {
+            "Pour Maya, 3ds Max, Cinema 4D, Unity, Unreal : arborescence et repères gardés, matériaux simples"
+        }
+    };
+    for (child, f) in tabs_fmt.children.iter_mut().zip(Format::ALL.iter()) {
+        child.tooltip = Some(obv_ui::Tooltip { text: tr(fmt_tip(*f)).into(), shortcut: None });
+    }
     body.push(row(ui, tr("Format"), tabs_fmt));
     body.push(widgets::divider(ui));
 
@@ -174,7 +190,9 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
                 .id(id("fidélité"))
                 .tooltip(tr("Forme exacte, fichier plus lourd")),
         )
-        .child(slider.tooltip(tr("Gauche : la forme d'abord. Droite : le moins de triangles possible")))
+        .child(slider.tooltip(tr(
+            "Gauche : la forme d'abord. Droite : le moins de triangles possible (conseillé : position proposée)",
+        )))
         .child(
             Node::text(tr("Performance"), small, c.text_secondary)
                 .id(id("performance"))
@@ -207,7 +225,9 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         tr("Écart maximal"),
         Node::row()
             .gap(8.0)
-            .child(input.tooltip(tr("Distance maximale garantie entre la forme d'origine et le résultat")))
+            .child(input.tooltip(tr(
+                "Distance maximale garantie entre la forme d'origine et le résultat (conseillé : la valeur du curseur)",
+            )))
             .child(Node::text("mm", TextStyle::new(13.0, Weight::Regular), c.text_secondary)),
     ));
     let (sil, toggled) = controls::toggle(ui, id("silhouette"), s.convert.keep_silhouette);
@@ -220,7 +240,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
     body.push(row(
         ui,
         tr("Silhouette"),
-        sil.tooltip(tr("Arêtes vives et contours plus fidèles, au prix de quelques triangles")),
+        sil.tooltip(tr("Arêtes vives et contours plus fidèles, au prix de quelques triangles (conseillé : activé)")),
     ));
     if s.convert.format == Format::Glb {
         // Choix proposés par cette construction (Draco seulement si la bibliothèque est liée).
@@ -232,12 +252,12 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
             Compression::Draco => "Draco",
         };
         let tip = |c: Compression| match c {
-            Compression::None => "Flottants : lisible partout",
+            Compression::None => "Flottants : lisible partout, fichier le plus lourd",
             Compression::Quantize => {
-                "KHR_mesh_quantization : environ deux fois plus léger ; Blender, Unity, Unreal, three.js, Babylon.js"
+                "KHR_mesh_quantization : environ deux fois plus léger ; Blender, Unity, Unreal, three.js, Babylon.js (conseillé)"
             }
             Compression::Meshopt => {
-                "EXT_meshopt_compression : très léger, le plus rapide à décoder, pour le web (three.js, Babylon.js) ; Blender ne le lit pas"
+                "EXT_meshopt_compression : très léger, le plus rapide à décoder ; Blender ne le lit pas (conseillé pour le web)"
             }
             Compression::Draco => {
                 "KHR_draco_mesh_compression : le plus compact ; Blender, three.js, Unity (glTFast), Babylon.js ; décodage plus lent"

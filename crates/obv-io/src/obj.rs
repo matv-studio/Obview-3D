@@ -353,7 +353,7 @@ fn parse_obj_in(text: &str, fallback_name: &str, dir: Option<&Path>) -> Result<M
             Part { name, mesh: m }
         })
         .collect();
-    Ok(Model { parts, unit_m: 0.001, materials, textures })
+    Ok(Model { parts, unit_m: 0.001, materials, textures, ..Default::default() })
 }
 
 #[cfg(test)]

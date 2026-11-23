@@ -521,6 +521,7 @@ impl App {
                         tolerance_m: self.state.convert.tolerance_mm / 1000.0,
                         keep_silhouette: self.state.convert.keep_silhouette,
                         compression: self.state.convert.compression,
+                        layout: self.state.convert.layout,
                     };
                     let stem = std::path::Path::new(&self.state.file_name)
                         .file_stem()

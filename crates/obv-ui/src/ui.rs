@@ -696,12 +696,27 @@ impl Ui {
         let scale = self.dl.scale;
         let style = TextStyle::new(12.0, Weight::Medium);
         let small = TextStyle::new(11.0, Weight::Medium);
-        let text = self.fonts.layout(&tip.text, style, scale);
+        // Texte long : lignes coupées entre les mots, 380 px au plus.
+        const MAX_W: f32 = 380.0;
+        let mut lines = Vec::new();
+        let mut cur = String::new();
+        for word in tip.text.split(' ') {
+            let candidate = if cur.is_empty() { word.to_owned() } else { format!("{cur} {word}") };
+            if !cur.is_empty() && self.fonts.layout(&candidate, style, scale).width > MAX_W {
+                lines.push(self.fonts.layout(&cur, style, scale));
+                cur = word.to_owned();
+            } else {
+                cur = candidate;
+            }
+        }
+        lines.push(self.fonts.layout(&cur, style, scale));
+        let text_w = lines.iter().map(|l| l.width).fold(0.0, f32::max);
+        let line_h = 16.0;
         let key = tip.shortcut.as_ref().map(|s| self.fonts.layout(s, small, scale));
         let pad = vec2(8.0, 5.0);
         let key_w = key.as_ref().map(|k| k.width + 10.0 + 8.0).unwrap_or(0.0);
-        let w = (text.width + key_w + pad.x * 2.0).ceil();
-        let h = 26.0;
+        let w = (text_w + key_w + pad.x * 2.0).ceil();
+        let h = 26.0 + line_h * (lines.len() - 1) as f32;
         let (x, y) = if anchor.height() > 120.0 && anchor.height() > anchor.width() * 3.0 {
             // Élément haut et étroit (poignée) : à côté, à hauteur du pointeur.
             let py = self.input.pointer.map(|p| p.y).unwrap_or(anchor.center().y);
@@ -721,16 +736,19 @@ impl Ui {
         let r = Rect::from_xywh(x, y, w, h);
         self.dl.shadow(r, 6.0, 10.0, vec2(0.0, 3.0), c.shadow);
         self.dl.rect(r, 6.0, c.tooltip_bg, None);
-        self.fonts.draw(
-            &mut self.dl,
-            &mut self.atlas,
-            &text,
-            vec2(x + pad.x, y + ((h - text.height) * 0.5).round()),
-            c.tooltip_text,
-        );
+        let first_y = y + ((26.0 - lines[0].height) * 0.5).round();
+        for (i, l) in lines.iter().enumerate() {
+            self.fonts.draw(
+                &mut self.dl,
+                &mut self.atlas,
+                l,
+                vec2(x + pad.x, first_y + line_h * i as f32),
+                c.tooltip_text,
+            );
+        }
         if let Some(k) = key {
-            let kx = x + pad.x + text.width + 8.0;
-            let kr = Rect::from_xywh(kx, y + 5.0, k.width + 10.0, h - 10.0);
+            let kx = x + pad.x + text_w + 8.0;
+            let kr = Rect::from_xywh(kx, y + 5.0, k.width + 10.0, 16.0);
             self.dl.rect(kr, 4.0, c.tooltip_text.with_alpha(0.12), None);
             self.fonts.draw(
                 &mut self.dl,

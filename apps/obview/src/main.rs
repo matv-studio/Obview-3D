@@ -56,8 +56,8 @@ fn convert(args: &[String]) -> Result<(), String> {
         .collect();
     let [input, output] = files[..] else {
         return Err(pick(
-            "usage: --convert <input> <output> [--tolerance <mm>]",
-            "usage : --convertir <entrée> <sortie> [--ecart <mm>]",
+            "usage: --convert <input> <output> [--tolerance <mm>] [--flat]",
+            "usage : --convertir <entrée> <sortie> [--ecart <mm>] [--a-plat]",
         )
         .into());
     };
@@ -90,6 +90,8 @@ fn convert(args: &[String]) -> Result<(), String> {
         } else {
             obv_mesh::Compression::Quantize
         },
+        // Arbre d'assemblage gardé (D-35), sauf `--flat`.
+        layout: if flag(args, &["--flat", "--a-plat"]) { obv_mesh::Layout::Flat } else { obv_mesh::Layout::Assembly },
     };
     let r = obv_mesh::convert(&model, out, opts, &|_| {}).map_err(|e| obv_ui::i18n::tr_message(&e.to_string()))?;
     let (tin, tout) = (r.triangles_in(), r.triangles_out());

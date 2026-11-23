@@ -14,10 +14,37 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use obv_io::{Model, Part};
+use obv_io::{
+    Mesh, Model, Node, Part,
+    scene::{self, Mat4},
+};
 pub use optimize::{MeshReport, SimplifyParams, hausdorff, optimize_mesh, optimize_mesh_with};
 use rayon::prelude::*;
 pub use write::{Compression, Format, OutputFile, WriteOptions, encode};
+
+/// Organisation du fichier écrit (D-35).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Layout {
+    /// Arbre d'assemblage du fichier source : sous-ensembles, repères propres, géométries partagées.
+    #[default]
+    Assembly,
+    /// Pièces à plat, positions globales.
+    Flat,
+}
+
+/// Arbre du fichier écrit : nœuds (parents avant enfants) et instances des prototypes.
+#[derive(Clone, Debug, Default)]
+pub struct Structure {
+    pub nodes: Vec<Node>,
+    pub instances: Vec<Instance>,
+}
+
+/// Un prototype (pièce du modèle écrit, géométrie locale) posé sur un nœud.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Instance {
+    pub node: u32,
+    pub part: u32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ConvertOptions {
@@ -28,6 +55,7 @@ pub struct ConvertOptions {
     pub keep_silhouette: bool,
     /// GLB : compression des géométries.
     pub compression: Compression,
+    pub layout: Layout,
 }
 
 impl ConvertOptions {
@@ -93,7 +121,137 @@ pub fn optimize_model(
         .collect();
     let (parts, reports): (Vec<Part>, Vec<MeshReport>) = results.into_iter().unzip();
     (
-        Model { parts, unit_m: model.unit_m, materials: model.materials.clone(), textures: model.textures.clone() },
+        Model {
+            parts,
+            unit_m: model.unit_m,
+            materials: model.materials.clone(),
+            textures: model.textures.clone(),
+            ..Default::default()
+        },
+        Report { parts: reports, bytes: 0 },
+    )
+}
+
+/// Géométrie d'une pièce ramenée dans le repère de son nœud (`world` : transformation globale du nœud).
+fn to_local(mesh: &Mesh, world: &Mat4) -> Option<Mesh> {
+    let inv = scene::inverse_affine(world)?;
+    let mut m = mesh.clone();
+    for p in &mut m.positions {
+        *p = scene::point(&inv, p.map(f64::from)).map(|v| v as f32);
+    }
+    // Normales : transposée de l'inverse de `inv`, c'est-à-dire transposée de la partie linéaire de `world`.
+    let wt = |v: [f64; 3]| -> [f64; 3] { std::array::from_fn(|c| (0..3).map(|r| world[c * 4 + r] * v[r]).sum()) };
+    for n in &mut m.normals {
+        let v = wt(n.map(f64::from));
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-30);
+        *n = v.map(|c| (c / l) as f32);
+    }
+    // Instance en miroir : ses triangles ont été retournés à la lecture, on retrouve ceux du prototype.
+    if scene::det3(world) < 0.0 {
+        for t in m.indices.chunks_exact_mut(3) {
+            t.swap(1, 2);
+        }
+    }
+    Some(m)
+}
+
+/// Optimise les pièces gardées (`keep`, toutes si absent) selon l'organisation demandée : à plat, ou par
+/// prototype (géométrie locale simplifiée une fois, posée sur chaque instance), avec l'arbre réduit aux nœuds
+/// utiles. Le bilan compte chaque instance.
+pub fn optimize_with_layout(
+    model: &Model,
+    keep: Option<&[bool]>,
+    layout: Layout,
+    tolerance_m: f64,
+    keep_silhouette: bool,
+    progress: &(dyn Fn(f32) + Sync),
+) -> (Model, Option<Structure>, Report) {
+    let kept: Vec<usize> =
+        (0..model.parts.len()).filter(|i| keep.is_none_or(|k| k.get(*i).copied().unwrap_or(false))).collect();
+    let flat = || {
+        let sub = Model {
+            parts: kept.iter().map(|&i| model.parts[i].clone()).collect(),
+            unit_m: model.unit_m,
+            materials: model.materials.clone(),
+            textures: model.textures.clone(),
+            ..Default::default()
+        };
+        let (m, r) = optimize_model(&sub, tolerance_m, keep_silhouette, progress);
+        (m, None, r)
+    };
+    if layout == Layout::Flat || !model.has_structure() {
+        return flat();
+    }
+    let world = scene::world_matrices(&model.nodes);
+    // Prototypes des pièces gardées, dans l'ordre de première rencontre ; plus grande échelle de leurs instances.
+    let mut proto_of: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut protos: Vec<(usize, f64)> = Vec::new(); // (pièce source, échelle maximale)
+    let mut inst = Vec::with_capacity(kept.len());
+    for &i in &kept {
+        let pl = model.placements[i];
+        let w = &world[pl.node as usize];
+        let k = *proto_of.entry(pl.proto).or_insert_with(|| {
+            protos.push((i, 0.0));
+            protos.len() - 1
+        });
+        protos[k].1 = protos[k].1.max(scene::max_scale(w));
+        inst.push((pl.node, k));
+    }
+    let mut locals = Vec::with_capacity(protos.len());
+    for &(i, _) in &protos {
+        match to_local(&model.parts[i].mesh, &world[model.placements[i].node as usize]) {
+            Some(m) => locals.push(Part { name: model.parts[i].name.clone(), mesh: m }),
+            None => return flat(),
+        }
+    }
+    // Écart : celui des instances, ramené à l'échelle du prototype.
+    let done = AtomicUsize::new(0);
+    let total: usize = locals.iter().map(|p| p.mesh.triangle_count()).sum::<usize>().max(1);
+    let tol = tolerance_m / model.unit_m;
+    let results: Vec<(Part, MeshReport)> = locals
+        .par_iter()
+        .zip(protos.par_iter())
+        .map(|(p, &(_, s))| {
+            let t = (tol / s.max(1e-12)) as f32;
+            let (mesh, mut r) = optimize_mesh_with(&p.mesh, SimplifyParams { tolerance: t, keep_silhouette });
+            r.deviation *= s as f32;
+            let d = done.fetch_add(p.mesh.triangle_count(), Ordering::Relaxed) + p.mesh.triangle_count();
+            progress(d as f32 / total as f32);
+            (Part { name: p.name.clone(), mesh }, r)
+        })
+        .collect();
+    // Arbre réduit aux ancêtres des instances, indices renumérotés (l'ordre parents-enfants est gardé).
+    let mut used = vec![false; model.nodes.len()];
+    for &(n, _) in &inst {
+        let mut c = Some(n);
+        while let Some(i) = c {
+            if std::mem::replace(&mut used[i as usize], true) {
+                break;
+            }
+            c = model.nodes[i as usize].parent;
+        }
+    }
+    let mut remap = vec![u32::MAX; model.nodes.len()];
+    let mut nodes = Vec::new();
+    for (i, n) in model.nodes.iter().enumerate() {
+        if used[i] {
+            remap[i] = nodes.len() as u32;
+            nodes.push(Node { parent: n.parent.map(|p| remap[p as usize]), ..n.clone() });
+        }
+    }
+    let instances: Vec<Instance> =
+        inst.iter().map(|&(n, k)| Instance { node: remap[n as usize], part: k as u32 }).collect();
+    let reports: Vec<MeshReport> = inst.iter().map(|&(_, k)| results[k].1).collect();
+    let parts: Vec<Part> = results.into_iter().map(|(p, _)| p).collect();
+    (
+        Model {
+            parts,
+            unit_m: model.unit_m,
+            materials: model.materials.clone(),
+            textures: model.textures.clone(),
+            ..Default::default()
+        },
+        Some(Structure { nodes, instances }),
         Report { parts: reports, bytes: 0 },
     )
 }
@@ -105,19 +263,32 @@ pub fn convert(
     opts: ConvertOptions,
     progress: &(dyn Fn(f32) + Sync),
 ) -> std::io::Result<Report> {
+    convert_parts(model, None, path, opts, progress)
+}
+
+/// Comme [`convert`], pour les pièces gardées par `keep` (une valeur par pièce) seulement.
+pub fn convert_parts(
+    model: &Model,
+    keep: Option<&[bool]>,
+    path: &Path,
+    opts: ConvertOptions,
+    progress: &(dyn Fn(f32) + Sync),
+) -> std::io::Result<Report> {
     // Écart garanti partagé quand les positions seront quantifiées (GLB compressé) : 90 % à la simplification,
     // 10 % à la quantification ; leur somme reste dans l'écart demandé (D-30).
     let quantized = opts.format == Format::Glb && opts.compression != Compression::None;
     let share = if quantized { 0.9 } else { 1.0 };
-    let (out, mut report) =
-        optimize_model(model, opts.tolerance_m * share, opts.keep_silhouette, &|f| progress(f * 0.9));
+    let (out, structure, mut report) =
+        optimize_with_layout(model, keep, opts.layout, opts.tolerance_m * share, opts.keep_silhouette, &|f| {
+            progress(f * 0.9)
+        });
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "modele".into());
     let wopts = WriteOptions {
         format: opts.format,
         compression: opts.compression,
         tolerance: if quantized { (opts.tolerance_m * (1.0 - share) / model.unit_m) as f32 } else { 0.0 },
     };
-    let files = encode(&out, wopts, &stem);
+    let files = write::encode_with(&out, structure.as_ref(), wopts, &stem);
     report.bytes = files.iter().map(|f| f.data.len()).sum();
     let dir = path.parent().unwrap_or(Path::new("."));
     for (i, f) in files.iter().enumerate() {

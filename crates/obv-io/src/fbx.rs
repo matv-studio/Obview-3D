@@ -165,5 +165,5 @@ pub fn read_fbx(path: &Path) -> Result<Model, ReadError> {
         let name = if name.is_empty() { format!("Pièce {}", parts.len() + 1) } else { name };
         parts.push(Part { name, mesh: out });
     }
-    Ok(Model { parts, unit_m: 1.0, materials, textures })
+    Ok(Model { parts, unit_m: 1.0, materials, textures, ..Default::default() })
 }

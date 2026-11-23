@@ -35,12 +35,7 @@ fn sphere() -> Model {
         indices,
         submeshes: vec![SubMesh { first: 0, count, material: None }],
     };
-    Model {
-        parts: vec![Part { name: "Sphère".into(), mesh }],
-        unit_m: 0.001,
-        materials: Vec::new(),
-        textures: Vec::new(),
-    }
+    Model { parts: vec![Part { name: "Sphère".into(), mesh }], unit_m: 0.001, ..Default::default() }
 }
 
 #[test]
@@ -52,7 +47,13 @@ fn ecart_garanti_avec_quantification() {
     let tol_m = 0.05e-3;
     for compression in Compression::ALL.into_iter().filter(|c| c.available()) {
         let path = dir.join(format!("{compression:?}.glb"));
-        let opts = ConvertOptions { format: Format::Glb, tolerance_m: tol_m, keep_silhouette: false, compression };
+        let opts = ConvertOptions {
+            format: Format::Glb,
+            tolerance_m: tol_m,
+            keep_silhouette: false,
+            compression,
+            layout: Default::default(),
+        };
         convert(&model, &path, opts, &|_| {}).unwrap();
         let back = obv_io::read_glb(&path).unwrap();
         // Relu en mètres : ramené en millimètres.

@@ -273,7 +273,7 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options, const C
       BRepBndLib::Add(XCAFDoc_ShapeTool::GetShape(roots.Value(i)), box);
     }
     double diag = box.IsVoid() ? 1.0 : std::sqrt(box.SquareExtent());
-    const double deflection = std::max(diag * options.linear, 1e-7);
+    const double deflection = std::max(options.absolute > 0.0 ? options.absolute / result.unit_m : diag * options.linear, 1e-7);
 
     // Formes de référence distinctes à mailler : l'avancement du maillage se compte en formes.
     std::set<std::string> distinct;
@@ -294,6 +294,17 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options, const C
     params.InParallel = true;
 
     std::map<std::string, Prototype> cache;
+    // Arbre d'assemblage (D-35) : un nœud par instance (identifiant de chemin d'XCAFPrs), transformation locale ;
+    // un numéro de prototype par forme de référence maillée.
+    std::map<std::string, uint32_t> node_index;
+    std::map<std::string, uint32_t> proto_index;
+    auto node_name = [](const XCAFPrs_DocumentNode& n) {
+      std::string name = label_name(n.Label);
+      if (name.empty() || name.rfind("=>", 0) == 0) {
+        name = label_name(n.RefLabel);
+      }
+      return name;
+    };
     for (XCAFPrs_DocumentExplorer ex(doc, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes); ex.More(); ex.Next()) {
       const XCAFPrs_DocumentNode& node = ex.Current();
       if (!node.Style.IsVisible()) {
@@ -319,6 +330,29 @@ CadResult read_cad(rust::Str path, bool iges, const CadOptions& options, const C
         continue;
       }
       CadPart part;
+      // Nœuds du chemin, de la racine à la feuille, créés à leur première rencontre.
+      int32_t parent = -1;
+      for (int d = 0; d <= ex.CurrentDepth(); ++d) {
+        const XCAFPrs_DocumentNode& n = ex.Current(d);
+        const std::string id(n.Id.ToCString());
+        auto found = node_index.find(id);
+        if (found == node_index.end()) {
+          CadNode cn;
+          cn.name = rust::String(node_name(n));
+          cn.parent = parent;
+          const gp_Trsf lt = (d == 0 ? n.Location : n.LocalTrsf).Transformation();
+          for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 4; ++c) {
+              cn.local[static_cast<size_t>(r * 4 + c)] = lt.Value(r + 1, c + 1);
+            }
+          }
+          found = node_index.emplace(id, static_cast<uint32_t>(result.nodes.size())).first;
+          result.nodes.push_back(std::move(cn));
+        }
+        parent = static_cast<int32_t>(found->second);
+      }
+      part.node = static_cast<uint32_t>(parent);
+      part.proto = proto_index.emplace(key, static_cast<uint32_t>(proto_index.size())).first->second;
       // Nom de l'instance, sinon du produit (OCCT nomme « =>[0:1:1:n] » les instances sans nom).
       std::string name = label_name(node.Label);
       if (name.empty() || name.rfind("=>", 0) == 0) {

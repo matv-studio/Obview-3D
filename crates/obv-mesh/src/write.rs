@@ -3,7 +3,9 @@
 
 use std::io::Write;
 
-use obv_io::Model;
+use obv_io::{Model, Part, scene};
+
+use crate::Structure;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -90,10 +92,58 @@ pub struct OutputFile {
 
 /// Encode le modèle. `stem` : nom de base des fichiers (sans extension). OBJ ajoute un `.mtl` et les images.
 pub fn encode(model: &Model, opts: WriteOptions, stem: &str) -> Vec<OutputFile> {
+    encode_with(model, None, opts, stem)
+}
+
+/// Comme [`encode`] ; avec `structure`, les pièces du modèle sont des prototypes en coordonnées locales, posés
+/// sur les nœuds de l'arbre (D-35). OBJ, sans hiérarchie, reçoit alors chaque instance en positions globales,
+/// nommée par son chemin.
+pub fn encode_with(model: &Model, structure: Option<&Structure>, opts: WriteOptions, stem: &str) -> Vec<OutputFile> {
     match opts.format {
-        Format::Glb => vec![OutputFile { name: format!("{stem}.glb"), data: glb(model, opts) }],
-        Format::Obj => obj(model, stem),
-        Format::Fbx => vec![OutputFile { name: format!("{stem}.fbx"), data: fbx(model) }],
+        Format::Glb => vec![OutputFile { name: format!("{stem}.glb"), data: glb(model, structure, opts) }],
+        Format::Obj => match structure {
+            Some(st) => obj(&expand(model, st), stem),
+            None => obj(model, stem),
+        },
+        Format::Fbx => vec![OutputFile { name: format!("{stem}.fbx"), data: fbx(model, structure) }],
+    }
+}
+
+/// Instances posées à leurs positions globales, nommées par leur chemin dans l'arbre.
+fn expand(model: &Model, st: &Structure) -> Model {
+    let world = scene::world_matrices(&st.nodes);
+    let parts = st
+        .instances
+        .iter()
+        .filter_map(|ins| {
+            let p = model.parts.get(ins.part as usize)?;
+            let w = &world[ins.node as usize];
+            let mut mesh = p.mesh.clone();
+            for v in &mut mesh.positions {
+                *v = scene::point(w, v.map(f64::from)).map(|c| c as f32);
+            }
+            let inv = scene::inverse_affine(w).unwrap_or(scene::IDENTITY);
+            for n in &mut mesh.normals {
+                // Transposée de l'inverse.
+                let v: [f64; 3] = std::array::from_fn(|c| (0..3).map(|r| inv[c * 4 + r] * n[r] as f64).sum());
+                let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-30);
+                *n = v.map(|c| (c / l) as f32);
+            }
+            if scene::det3(w) < 0.0 {
+                for t in mesh.indices.chunks_exact_mut(3) {
+                    t.swap(1, 2);
+                }
+            }
+            let name = scene::path(&st.nodes, ins.node);
+            Some(Part { name: if name.is_empty() { p.name.clone() } else { name }, mesh })
+        })
+        .collect();
+    Model {
+        parts,
+        unit_m: model.unit_m,
+        materials: model.materials.clone(),
+        textures: model.textures.clone(),
+        ..Default::default()
     }
 }
 
@@ -201,7 +251,7 @@ impl Bin {
     }
 }
 
-fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
+fn glb(model: &Model, structure: Option<&Structure>, opts: WriteOptions) -> Vec<u8> {
     use serde_json::{Value, json};
     let to_m = model.unit_m as f32;
     let meshopt_on = opts.compression == Compression::Meshopt;
@@ -274,7 +324,8 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
         "baseColorFactor": [0.584, 0.604, 0.638, 1.0], "metallicFactor": 0.7, "roughnessFactor": 0.35
     }}));
 
-    for part in &model.parts {
+    let mut part_nodes: Vec<Option<Value>> = vec![None; model.parts.len()];
+    for (pi, part) in model.parts.iter().enumerate() {
         let m = &part.mesh;
         if m.indices.is_empty() {
             continue;
@@ -337,7 +388,7 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
                     "extensions": {"KHR_draco_mesh_compression": {"bufferView": view, "attributes": dattrs}}}));
             }
             if !prims.is_empty() {
-                nodes.push(json!({"name": part.name, "mesh": meshes.len()}));
+                part_nodes[pi] = Some(json!({"name": part.name, "mesh": meshes.len()}));
                 meshes.push(json!({"name": part.name, "primitives": prims}));
             }
             continue;
@@ -442,7 +493,62 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
             prims.push(json!({"attributes": attrs, "indices": accessors.len() - 1, "material": mat}));
         }
         meshes.push(json!({"name": part.name, "primitives": prims}));
-        nodes.push(node);
+        part_nodes[pi] = Some(node);
+    }
+    // Nœuds : à plat, un par pièce ; avec l'arbre (D-35), ses nœuds et les maillages posés dessus. Le nœud d'une
+    // instance porte son maillage directement, sauf quand la déquantification des positions demande sa propre
+    // transformation : un enfant la porte, pour que le repère de l'instance reste celui du fichier source.
+    let mut roots: Vec<usize> = Vec::new();
+    match structure {
+        None => {
+            for n in part_nodes.into_iter().flatten() {
+                roots.push(nodes.len());
+                nodes.push(n);
+            }
+        }
+        Some(st) => {
+            let base = nodes.len();
+            for n in &st.nodes {
+                let mut v = json!({"name": n.name});
+                if !scene::is_identity(&n.local, 1e-12) {
+                    let mut m = n.local;
+                    for v in &mut m[12..15] {
+                        *v *= to_m as f64;
+                    }
+                    v["matrix"] = json!(m);
+                }
+                nodes.push(v);
+            }
+            let mut children: Vec<Vec<usize>> = vec![Vec::new(); st.nodes.len()];
+            for (i, n) in st.nodes.iter().enumerate() {
+                match n.parent {
+                    Some(p) => children[p as usize].push(base + i),
+                    None => roots.push(base + i),
+                }
+            }
+            let mut on_node = vec![0usize; st.nodes.len()];
+            for ins in &st.instances {
+                on_node[ins.node as usize] += 1;
+            }
+            for ins in &st.instances {
+                let Some(Some(mn)) = part_nodes.get(ins.part as usize) else { continue };
+                let target = base + ins.node as usize;
+                let plain = mn.get("translation").is_none() && mn.get("scale").is_none();
+                if plain && on_node[ins.node as usize] == 1 && nodes[target].get("mesh").is_none() {
+                    nodes[target]["mesh"] = mn["mesh"].clone();
+                } else {
+                    let mut c = mn.clone();
+                    c["name"] = nodes[target]["name"].clone();
+                    children[ins.node as usize].push(nodes.len());
+                    nodes.push(c);
+                }
+            }
+            for (i, c) in children.into_iter().enumerate() {
+                if !c.is_empty() {
+                    nodes[base + i]["children"] = json!(c);
+                }
+            }
+        }
     }
     let mut ext_used: Vec<&str> = Vec::new();
     if used_draco {
@@ -465,7 +571,7 @@ fn glb(model: &Model, opts: WriteOptions) -> Vec<u8> {
     let mut doc = json!({
         "asset": {"version": "2.0", "generator": "Obview 3D"},
         "scene": 0,
-        "scenes": [{"nodes": (0..nodes.len()).collect::<Vec<_>>()}],
+        "scenes": [{"nodes": roots}],
         "nodes": nodes,
         "meshes": meshes,
         "materials": materials,
@@ -723,6 +829,35 @@ fn p70_color(name: &str, c: [f64; 3]) -> FbxNode {
 }
 
 /// Nom d'objet FBX binaire : « nom\0\x01Classe ».
+fn p70_vec(name: &str, ty: &str, v: [f64; 3]) -> FbxNode {
+    node("P", vec![s(name), s(ty), s(""), s("A"), Prop::F64(v[0]), Prop::F64(v[1]), Prop::F64(v[2])])
+}
+
+/// Translation (multipliée par `unit`), rotation en degrés dans l'ordre XYZ de FBX (R = Rz·Ry·Rx) et échelle d'une
+/// transformation affine ; une symétrie passe par une échelle négative en X.
+fn decompose(m: &scene::Mat4, unit: f64) -> ([f64; 3], [f64; 3], [f64; 3]) {
+    let t = [m[12] * unit, m[13] * unit, m[14] * unit];
+    let mut cols: [[f64; 3]; 3] = std::array::from_fn(|c| [m[c * 4], m[c * 4 + 1], m[c * 4 + 2]]);
+    let mut sc = cols.map(|c| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().max(1e-300));
+    if scene::det3(m) < 0.0 {
+        sc[0] = -sc[0];
+    }
+    for (c, k) in cols.iter_mut().zip(sc) {
+        *c = c.map(|v| v / k);
+    }
+    // r(ligne, colonne) de la rotation.
+    let r = |row: usize, col: usize| cols[col][row];
+    let sy = (-r(2, 0)).clamp(-1.0, 1.0);
+    let b = sy.asin();
+    let (a, c) = if sy.abs() < 0.999_999 {
+        (r(2, 1).atan2(r(2, 2)), r(1, 0).atan2(r(0, 0)))
+    } else {
+        // Blocage de cardan : Z absorbé par X.
+        ((-r(1, 2)).atan2(r(1, 1)), 0.0)
+    };
+    (t, [a.to_degrees(), b.to_degrees(), c.to_degrees()], sc)
+}
+
 fn fbx_name(name: &str, class: &str) -> Prop {
     let mut b = name.replace('\0', " ").into_bytes();
     b.extend(b"\x00\x01");
@@ -730,7 +865,7 @@ fn fbx_name(name: &str, class: &str) -> Prop {
     Prop::Str(b)
 }
 
-fn fbx(model: &Model) -> Vec<u8> {
+fn fbx(model: &Model, structure: Option<&Structure>) -> Vec<u8> {
     let scale = model.unit_m * 1000.0; // coordonnées écrites en millimètres
     let mut objects = Vec::new();
     let mut connections = Vec::new();
@@ -804,12 +939,14 @@ fn fbx(model: &Model) -> Vec<u8> {
         mat_ids.push(mid);
     }
     let default_mat = mat_ids.len() - 1;
-    for part in &model.parts {
+    // Géométries (une par pièce, partagée par ses instances) et matériaux de chacune, dans l'ordre de liaison.
+    let mut geoms: Vec<Option<(i64, Vec<usize>)>> = vec![None; model.parts.len()];
+    for (pi, part) in model.parts.iter().enumerate() {
         let m = &part.mesh;
         if m.indices.is_empty() {
             continue;
         }
-        let (geom_id, model_id) = (id(), id());
+        let geom_id = id();
         let vertices: Vec<f64> = m.positions.iter().flat_map(|p| p.map(|v| v as f64 * scale)).collect();
         let polys: Vec<i32> =
             m.indices.chunks_exact(3).flat_map(|t| [t[0] as i32, t[1] as i32, -(t[2] as i32) - 1]).collect();
@@ -872,18 +1009,70 @@ fn fbx(model: &Model) -> Vec<u8> {
         geom.push(node("Layer", vec![Prop::I32(0)]).with(layers));
         objects
             .push(node("Geometry", vec![Prop::I64(geom_id), fbx_name(&part.name, "Geometry"), s("Mesh")]).with(geom));
-        objects.push(node("Model", vec![Prop::I64(model_id), fbx_name(&part.name, "Model"), s("Mesh")]).with(vec![
+        geoms[pi] = Some((geom_id, local));
+    }
+    // Modèles : à plat, un par pièce à l'origine ; avec l'arbre (D-35), un par nœud (repère local en
+    // translation, rotation XYZ et échelle), le maillage sur le nœud de son instance.
+    let mut n_models = 0i32;
+    let mut make_model = |objects: &mut Vec<FbxNode>, name: &str, kind: &str, local: Option<&scene::Mat4>| -> i64 {
+        let mid = id();
+        let mut props = vec![p70("DefaultAttributeIndex", "int", "Integer", Prop::I32(0))];
+        if let Some(m) = local.filter(|m| !scene::is_identity(m, 1e-12)) {
+            let (t, r, sc) = decompose(m, scale);
+            props.push(p70_vec("Lcl Translation", "Lcl Translation", t));
+            props.push(p70_vec("Lcl Rotation", "Lcl Rotation", r));
+            props.push(p70_vec("Lcl Scaling", "Lcl Scaling", sc));
+        }
+        objects.push(node("Model", vec![Prop::I64(mid), fbx_name(name, "Model"), s(kind)]).with(vec![
             node("Version", vec![Prop::I32(232)]),
-            node("Properties70", vec![]).with(vec![p70("DefaultAttributeIndex", "int", "Integer", Prop::I32(0))]),
+            node("Properties70", vec![]).with(props),
             node("Culling", vec![s("CullingOff")]),
         ]));
-        connections.push(node("C", vec![s("OO"), Prop::I64(model_id), Prop::I64(0)]));
-        connections.push(node("C", vec![s("OO"), Prop::I64(geom_id), Prop::I64(model_id)]));
-        for g in local {
-            connections.push(node("C", vec![s("OO"), Prop::I64(mat_ids[g]), Prop::I64(model_id)]));
+        n_models += 1;
+        mid
+    };
+    let attach = |connections: &mut Vec<FbxNode>, model_id: i64, g: &(i64, Vec<usize>)| {
+        connections.push(node("C", vec![s("OO"), Prop::I64(g.0), Prop::I64(model_id)]));
+        for m in &g.1 {
+            connections.push(node("C", vec![s("OO"), Prop::I64(mat_ids[*m]), Prop::I64(model_id)]));
+        }
+    };
+    match structure {
+        None => {
+            for (part, g) in model.parts.iter().zip(&geoms) {
+                let Some(g) = g else { continue };
+                let mid = make_model(&mut objects, &part.name, "Mesh", None);
+                connections.push(node("C", vec![s("OO"), Prop::I64(mid), Prop::I64(0)]));
+                attach(&mut connections, mid, g);
+            }
+        }
+        Some(st) => {
+            let mut on_node: Vec<Vec<usize>> = vec![Vec::new(); st.nodes.len()];
+            for ins in &st.instances {
+                if geoms.get(ins.part as usize).is_some_and(Option::is_some) {
+                    on_node[ins.node as usize].push(ins.part as usize);
+                }
+            }
+            let mut ids = Vec::with_capacity(st.nodes.len());
+            for (i, n) in st.nodes.iter().enumerate() {
+                let single = on_node[i].len() == 1;
+                let mid = make_model(&mut objects, &n.name, if single { "Mesh" } else { "Null" }, Some(&n.local));
+                let parent = n.parent.map(|p| ids[p as usize]).unwrap_or(0);
+                connections.push(node("C", vec![s("OO"), Prop::I64(mid), Prop::I64(parent)]));
+                if single {
+                    attach(&mut connections, mid, geoms[on_node[i][0]].as_ref().unwrap());
+                } else {
+                    for &p in &on_node[i] {
+                        let cid = make_model(&mut objects, &n.name, "Mesh", None);
+                        connections.push(node("C", vec![s("OO"), Prop::I64(cid), Prop::I64(mid)]));
+                        attach(&mut connections, cid, geoms[p].as_ref().unwrap());
+                    }
+                }
+                ids.push(mid);
+            }
         }
     }
-    let count = model.parts.iter().filter(|p| !p.mesh.indices.is_empty()).count() as i32;
+    let count = geoms.iter().filter(|g| g.is_some()).count() as i32;
     let (n_mat, n_tex) = (mat_ids.len() as i32, tex_ids.len() as i32);
     let top = vec![
         node("FBXHeaderExtension", vec![]).with(vec![
@@ -907,10 +1096,10 @@ fn fbx(model: &Model) -> Vec<u8> {
         ]),
         node("Definitions", vec![]).with(vec![
             node("Version", vec![Prop::I32(100)]),
-            node("Count", vec![Prop::I32(count * 2 + n_mat + n_tex * 2 + 1)]),
+            node("Count", vec![Prop::I32(count + n_models + n_mat + n_tex * 2 + 1)]),
             node("ObjectType", vec![s("GlobalSettings")]).with(vec![node("Count", vec![Prop::I32(1)])]),
             node("ObjectType", vec![s("Geometry")]).with(vec![node("Count", vec![Prop::I32(count)])]),
-            node("ObjectType", vec![s("Model")]).with(vec![node("Count", vec![Prop::I32(count)])]),
+            node("ObjectType", vec![s("Model")]).with(vec![node("Count", vec![Prop::I32(n_models)])]),
             node("ObjectType", vec![s("Material")]).with(vec![node("Count", vec![Prop::I32(n_mat)])]),
             node("ObjectType", vec![s("Texture")]).with(vec![node("Count", vec![Prop::I32(n_tex)])]),
             node("ObjectType", vec![s("Video")]).with(vec![node("Count", vec![Prop::I32(n_tex)])]),
@@ -971,6 +1160,7 @@ mod tests {
                 mime: "image/png".into(),
                 data: vec![0x89, b'P', b'N', b'G', 9, 9],
             }],
+            ..Default::default()
         }
     }
 

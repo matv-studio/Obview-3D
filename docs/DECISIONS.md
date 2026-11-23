@@ -495,3 +495,34 @@ l'instant ».
   gabarit Apple).
 - Barre du haut : icône `obview` (même dessin, grille 16) à la place de l'icône de pièce.
 - « Pour l'instant » : le logo pourra encore changer ; refaire les fichiers par `tools/icones.py`.
+
+## D-35 · Export en assemblage : arborescence, repères propres, géométries partagées (23/11/2026)
+
+Constat d'un autre chat, vérifié dans le code (17/11) : l'export perdait l'arborescence (pièces à plat), plaçait
+toutes les origines au centre de la scène (positions globales recopiées dans chaque pièce), dupliquait les pièces
+répétées, n'avait pas de finesse de maillage CAO réglable et ne retirait rien. Le point sur les axes était faux :
+la rotation Z → Y est faite à la lecture. Demande : « implémente aussi tes solutions aux cinq points ».
+
+- Modèle commun (`obv-io/src/scene.rs`) : nœuds (nom, parent, transformation locale), placement de chaque pièce
+  (nœud, prototype). Les pièces gardent leurs positions globales pour l'affichage ; l'arbre ne sert qu'à l'export.
+- STEP / IGES : un nœud par instance (identifiant de chemin d'XCAFPrs, `LocalTrsf`), prototype = forme de
+  référence et matériaux. La conversion d'axes est appliquée en conjugaison (R·L·R⁻¹) : un logiciel qui revient à
+  Z vers le haut (Blender) retrouve exactement les repères de la CAO. glTF : nœuds du fichier, prototype = maillage.
+- Export (`obv-mesh`, `Layout::Assembly` par défaut, `Flat` au choix, `--flat` en ligne de commande) : chaque
+  prototype est ramené dans le repère de sa première instance (inverse de la transformation globale, triangles
+  rétablis pour les instances en miroir), simplifié une fois (écart divisé par la plus grande échelle de ses
+  instances), puis posé sur chaque nœud. Arbre réduit aux ancêtres des pièces gardées.
+  - GLB : nœuds à matrice locale, maillage partagé ; quand la quantification exige sa propre transformation
+    (déquantification), un nœud enfant la porte, pour que le repère de l'instance reste celui de la CAO.
+  - FBX : un Model par nœud (translation, rotation XYZ, échelle ; miroir en échelle X négative), Geometry
+    partagée par les instances.
+  - OBJ (sans hiérarchie) : instances à leurs positions globales, nommées par leur chemin.
+  - Montre STEP d'essai : 285 pièces, 146 géométries, 654 nœuds ; 4,2 Mo au lieu de 6,1 Mo à plat.
+- Pièces gardées : `convert_parts(…, keep)` (une valeur par pièce), pour les filtres de la fenêtre Convertir.
+- Maillage CAO : flèche absolue possible (`Options::absolute_m`), pour un nouveau maillage depuis la CAO à
+  l'export (angle et écart choisis).
+- Info-bulles de la fenêtre Convertir : chaque choix expliqué, choix conseillé entre parenthèses ; les info-bulles
+  longues passent à la ligne (380 px au plus).
+- En suspens, après validation des maquettes : options de la fenêtre Convertir (Structure, Pièces, Ignorer sous,
+  Pièces cachées, Angle max), retrait des pièces invisibles de l'extérieur (rendus d'identifiants depuis de
+  nombreuses directions).

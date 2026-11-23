@@ -567,6 +567,14 @@ fn conversion_deux_themes() {
         ..Default::default()
     };
     shoot(&gpu, &model, &both(idle, "conversion_sombre", "conversion_claire"));
+    // Info-bulles des choix, choix conseillé entre parenthèses.
+    let format = Shot {
+        setup: |s| s.convert.open = true,
+        hover: Some(Id::new("convertir").with("format").with(0usize)),
+        tooltip: Some(Id::new("convertir").with("format").with(0usize)),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(format, "conversion_bulle_sombre", "conversion_bulle_claire"));
     let done = Shot {
         setup: |s| {
             s.convert.open = true;
