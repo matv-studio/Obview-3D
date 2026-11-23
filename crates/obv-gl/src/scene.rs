@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use glow::HasContext;
 use obv_render::{
     Band, Camera, GeometryArrays, MeshInput, Pick, PickRead, RenderMode, SceneParams, encode_params, gl_src,
+    materials::{GpuMaterial, TextureArray},
     resolve_pick,
 };
 
@@ -47,6 +48,7 @@ struct Geometry {
     normals: glow::Buffer,
     indices: glow::Buffer,
     attrs: glow::Buffer,
+    uvs: glow::Buffer,
     index_count: i32,
     edges: Option<(glow::Buffer, glow::Buffer)>,
     edge_count: i32,
@@ -81,6 +83,46 @@ pub struct GlScene {
     camera: RefCell<Camera>,
     /// Pyramide d'environnement (D-33), unité de texture 1.
     env: glow::Texture,
+    /// Table des matériaux (liaison 5) et tableau de leurs textures (unité 2), D-37.
+    materials: glow::Buffer,
+    textures: glow::Texture,
+}
+
+/// Tableau de textures RGBA 8 bits à niveaux, répété (convention glTF).
+unsafe fn texture_array(gl: &glow::Context, t: &TextureArray) -> Result<glow::Texture> {
+    unsafe {
+        let tex = gl.create_texture().map_err(GlError::Other)?;
+        gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(tex));
+        let layers = t.layers.len().max(1) as i32;
+        gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, t.levels as i32, glow::RGBA8, t.size as i32, t.size as i32, layers);
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+        for (layer, levels) in t.layers.iter().enumerate() {
+            let mut side = t.size as i32;
+            for (level, data) in levels.iter().enumerate() {
+                gl.tex_sub_image_3d(
+                    glow::TEXTURE_2D_ARRAY,
+                    level as i32,
+                    0,
+                    0,
+                    layer as i32,
+                    side,
+                    side,
+                    1,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(data)),
+                );
+                side = (side / 2).max(1);
+            }
+        }
+        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAX_LEVEL, t.levels as i32 - 1);
+        gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+        Ok(tex)
+    }
 }
 
 /// Texture RGBA16F à niveaux de l'environnement : longitude bouclée, latitude bornée.
@@ -170,8 +212,12 @@ impl GlScene {
                 section: RefCell::new(None),
                 camera: RefCell::new(Camera::default()),
                 env: env_texture(gl, &[(1, 1, vec![0, 0, 0, 0x3c00])])?,
+                materials: gl.create_buffer().map_err(GlError::Other)?,
+                textures: texture_array(gl, &TextureArray::empty())?,
             };
             upload(gl, s.params, glow::SHADER_STORAGE_BUFFER, &[0; 64], glow::DYNAMIC_DRAW);
+            let satin = GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff]);
+            upload(gl, s.materials, glow::SHADER_STORAGE_BUFFER, bytemuck::bytes_of(&satin), glow::STATIC_DRAW);
             Ok(s)
         }
     }
@@ -190,6 +236,7 @@ impl GlScene {
             normals: buf(bytemuck::cast_slice(&a.normals))?,
             indices: buf(bytemuck::cast_slice(&a.indices))?,
             attrs: buf(bytemuck::cast_slice(&a.attrs))?,
+            uvs: buf(bytemuck::cast_slice(&a.uvs))?,
             index_count: a.indices.len() as i32,
             edges: if a.edges.is_empty() {
                 None
@@ -205,7 +252,7 @@ impl GlScene {
     fn free_geometry(&mut self, gl: &glow::Context) {
         if let Some(g) = self.geometry.take() {
             unsafe {
-                for b in [g.positions, g.normals, g.indices, g.attrs] {
+                for b in [g.positions, g.normals, g.indices, g.attrs, g.uvs] {
                     gl.delete_buffer(b);
                 }
                 if let Some((e, p)) = g.edges {
@@ -233,11 +280,26 @@ impl GlScene {
         Ok(())
     }
 
-    /// Environnement sur l'unité 1 ; l'unité 0 redevient active (l'interface y lie son atlas).
+    /// Remplace la table des matériaux et le tableau de leurs textures (D-37).
+    pub fn set_materials(&mut self, dev: &GlDevice, table: &[GpuMaterial], textures: &TextureArray) -> Result<()> {
+        let gl = &dev.gl;
+        let fallback = [GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff])];
+        let table = if table.is_empty() { &fallback[..] } else { table };
+        upload(gl, self.materials, glow::SHADER_STORAGE_BUFFER, bytemuck::cast_slice(table), glow::STATIC_DRAW);
+        let t = unsafe { texture_array(gl, textures)? };
+        unsafe { gl.delete_texture(self.textures) };
+        self.textures = t;
+        Ok(())
+    }
+
+    /// Environnement sur l'unité 1, textures des matériaux sur l'unité 2 ; l'unité 0 redevient active
+    /// (l'interface y lie son atlas).
     fn bind_env(&self, gl: &glow::Context) {
         unsafe {
             gl.active_texture(glow::TEXTURE1);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.env));
+            gl.active_texture(glow::TEXTURE2);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.textures));
             gl.active_texture(glow::TEXTURE0);
         }
     }
@@ -255,6 +317,8 @@ impl GlScene {
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(g.indices));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 3, Some(g.attrs));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(self.params));
+            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 5, Some(self.materials));
+            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 6, Some(g.uvs));
         }
     }
 
@@ -417,6 +481,8 @@ impl GlScene {
             gl.delete_texture(self.pick_target.ids);
             gl.delete_texture(self.pick_target.depth);
             gl.delete_texture(self.env);
+            gl.delete_texture(self.textures);
+            gl.delete_buffer(self.materials);
         }
     }
 }

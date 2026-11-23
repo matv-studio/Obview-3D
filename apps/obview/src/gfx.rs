@@ -227,6 +227,17 @@ impl Gfx {
         }
     }
 
+    /// Matériaux et textures du modèle (D-37).
+    pub fn set_materials(&mut self, m: &crate::materials::Prepared) -> Result<(), String> {
+        match &mut self.inner {
+            Inner::Vulkan(v) => v.scene.set_materials(&m.table, &m.textures).map_err(|e| e.to_string()),
+            Inner::Gl(g) => match &mut g.scene {
+                Some(s) => s.set_materials(&g.dev, &m.table, &m.textures).map_err(|e| e.to_string()),
+                None => Ok(()),
+            },
+        }
+    }
+
     /// Remplace l'environnement d'éclairage (D-33).
     pub fn set_environment(&mut self, env: &obv_render::light::Environment) -> Result<(), String> {
         match &mut self.inner {
@@ -293,13 +304,13 @@ impl Gfx {
         model: &Model,
         state: &AppState,
         theme: &obv_ui::Theme,
-        accent: [u8; 4],
+        materials: &crate::materials::Prepared,
         width: u32,
         height: u32,
         transparent: bool,
     ) -> Result<Vec<u8>, String> {
         match &self.inner {
-            Inner::Vulkan(v) => frame::capture(&v.gpu, model, state, theme, accent, width, height, transparent)
+            Inner::Vulkan(v) => frame::capture(&v.gpu, model, state, theme, materials, width, height, transparent)
                 .map_err(|e| e.to_string()),
             Inner::Gl(g) => {
                 let scene = g.scene.as_ref().ok_or("scène absente")?;

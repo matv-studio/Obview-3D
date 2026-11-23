@@ -1,6 +1,17 @@
 #extension GL_GOOGLE_include_directive : require
 #include "light_block.glsl"
 
+// Matériau métal-rugosité (D-37), même disposition que `materials::GpuMaterial` (48 octets).
+struct Material {
+    vec4 base;
+    vec3 emissive;
+    float metallic;
+    float roughness;
+    int base_tex;
+    int mr_tex;
+    float pad;
+};
+
 #ifdef OBV_GL
 // OpenGL 4.30 (moteur de secours, D-30) : tampons de stockage liés à des points fixes au lieu des adresses ;
 // positions et normales lues en flottants (pas de 12 octets, comme la disposition scalaire de Vulkan).
@@ -15,8 +26,17 @@ layout(std430, binding = 4) readonly buffer ParamsBuf {
     uint flags;
     vec4 plane;
     LIGHT_BLOCK
+    // Adresses des matériaux et coordonnées de texture (Vulkan) : liées à part ici.
+    uvec2 ext_materials;
+    uvec2 ext_uvs;
+    uint selected;
+    uint accent;
+    uint ext_flags;
+    uint ext_pad;
     vec4 offsets[];
 } params_b;
+layout(std430, binding = 5) readonly buffer Materials { Material materials_m[]; };
+layout(std430, binding = 6) readonly buffer Uvs { vec2 uvs_v[]; };
 layout(std140, binding = 0) uniform Push {
     mat4 view_proj;
     uint mode;
@@ -30,6 +50,8 @@ layout(std140, binding = 0) uniform Push {
 #define INDEX(i) indices_u[i]
 #define ATTR(i) attrs_u[i]
 #define PARAMS params_b
+#define MATERIAL(i) materials_m[i]
+#define UV(i) uvs_v[i]
 #define VERTEX_ID gl_VertexID
 #ifdef OBV_STAGE_FRAG
 // Pixels comptés depuis le haut, comme sous Vulkan (bandes de l'inspecteur, hachures).
@@ -42,6 +64,8 @@ layout(origin_upper_left) in vec4 gl_FragCoord;
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Vec3s { vec3 v[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer U32s { uint v[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer UVec2s { uvec2 v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Vec2s { vec2 v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Materials { Material m[]; };
 
 // Paramètres de l'image, communs à tous les tracés : œil, projection, coupe, éclatement.
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Params {
@@ -54,6 +78,14 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Par
     // Plan de coupe : on garde dot(plane.xyz, p) <= plane.w.
     vec4 plane;
     LIGHT_BLOCK
+    // Table des matériaux, coordonnées de texture par sommet (D-37).
+    Materials materials;
+    Vec2s uvs;
+    // Rang de la pièce sélectionnée (0xffffffff : aucune), couleur d'accent sRGB 8 bits.
+    uint selected;
+    uint accent;
+    uint ext_flags;
+    uint ext_pad;
     // Décalage de chaque pièce (vue éclatée), dans l'ordre du tracé.
     vec4 offsets[];
 };
@@ -64,10 +96,11 @@ layout(push_constant, scalar) uniform Push {
     Vec3s positions;
     Vec3s normals;
     U32s indices;
-    // Par sommet : couleur sRGB 8 bits, indice de la pièce.
+    // Par sommet : matériau, rang de la pièce dans le tracé.
     UVec2s attrs;
     Params params;
-    // Rendu : 0 éclairé, 1 couleur, 2 normales, 3 topologie, 4 rayons X, 5 arêtes (surfaces).
+    // Rendu : 0 éclairé, 1 albédo, 2 normales, 3 topologie, 4 rayons X, 5 arêtes (surfaces), 6 réflectivité,
+    // 7 brillance.
     uint mode;
     uint pad;
     // Bande de l'inspecteur : fragments gardés si band.z <= dot(gl_FragCoord.xy, band.xy) < band.w.
@@ -78,6 +111,8 @@ layout(push_constant, scalar) uniform Push {
 #define INDEX(i) pc.indices.v[i]
 #define ATTR(i) pc.attrs.v[i]
 #define PARAMS pc.params
+#define MATERIAL(i) pc.params.materials.m[i]
+#define UV(i) pc.params.uvs.v[i]
 #define VERTEX_ID gl_VertexIndex
 #endif
 
@@ -93,11 +128,13 @@ vec4 clip_position(vec4 p) {
 }
 
 const uint MODE_LIT = 0u;
-const uint MODE_COLOR = 1u;
+const uint MODE_ALBEDO = 1u;
 const uint MODE_NORMALS = 2u;
 const uint MODE_TOPOLOGY = 3u;
 const uint MODE_XRAY = 4u;
 const uint MODE_EDGES = 5u;
+const uint MODE_REFLECTIVITY = 6u;
+const uint MODE_GLOSS = 7u;
 
 // `pixel` : gl_FragCoord.xy (la fonction sert aussi aux nuanceurs de sommets qui incluent ce fichier).
 bool outside_band(vec2 pixel) {

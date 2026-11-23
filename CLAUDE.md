@@ -97,7 +97,7 @@ Dépôt
 - `tools/` : vérification (`verify.sh`), OpenCASCADE (`occt.sh`), Draco (`draco.sh`), SDK Vulkan
   (`macos-sdk.sh`, `linux-sdk.sh`), Inno Setup (`inno.ps1`), paquets (`macos-app.sh`, `macos-dmg.sh`,
   `linux-package.sh` ; `APPIMAGETOOL=none` : .deb seul, l'outil AppImage téléchargé est refusé dans la session),
-  icônes de l'application (`icones.py`, D-34).
+  icônes de l'application (`icones.py`, D-36 ; source : `crates/obv-ui/assets/images/obview-clair.svg`).
 - `packaging/` : installateur Windows (`windows/obview.iss`), types MIME Linux.
 - Éclairage (D-33) : préfiltrage `crates/obv-render/src/light.rs` (HDRI dans `crates/obv-render/assets/hdri`,
   crédits `CREDITS.md`), envoi au GPU `env_gpu.rs` (Vulkan) et `obv-gl/src/scene.rs`, nuanceurs `light.glsl`,

@@ -102,11 +102,16 @@ pub fn draw_view(scene: &dyn SceneDraw, state: &AppState, theme: &Theme, v: obv_
     let c = &theme.color;
     let cam = &state.camera;
     let offsets = tools::explode_offsets(state);
-    let params =
-        SceneParams { section: tools::section_plane(state), offsets: &offsets, light: crate::lighting::block(state) };
+    let params = SceneParams {
+        section: tools::section_plane(state),
+        offsets: &offsets,
+        light: crate::lighting::block(state),
+        selected: state.selected.map(|i| i as u32),
+        accent: to_srgb8(crate::shell::selection_color(theme)),
+    };
     scene.set_params(cam, &params);
     // Vue normale et bandes des rendus selon les limites animées (au repos : l'état exact de l'inspecteur).
-    let cuts = if animated { state.inspector_cuts } else { inspector::target_cuts(state.inspector) };
+    let cuts = if animated { state.inspector_cuts } else { inspector::targets(state) };
     let top = [c.viewport_top.r, c.viewport_top.g, c.viewport_top.b, 1.0];
     let bottom = [c.viewport_bottom.r, c.viewport_bottom.g, c.viewport_bottom.b, 1.0];
     let gray = inspector::background(theme.kind == ThemeKind::Dark);
@@ -128,7 +133,7 @@ pub fn capture(
     model: &Model,
     state: &AppState,
     theme: &Theme,
-    accent: [u8; 4],
+    materials: &crate::materials::Prepared,
     width: u32,
     height: u32,
     transparent: bool,
@@ -141,7 +146,8 @@ pub fn capture(
         scene.set_environment(env)?;
     }
     let edges = (state.inspector != Inspector::Off).then(|| EdgeCache::compute(model));
-    scene.set_meshes(&mesh_inputs(model, state, accent, edges.as_ref()))?;
+    scene.set_materials(&materials.table, &materials.textures)?;
+    scene.set_meshes(&mesh_inputs(model, state, edges.as_ref()))?;
     let v = state.viewport.get();
     let scale = w as f32 / v.width().max(1.0);
     let view = obv_ui::Rect::from_xywh(0.0, 0.0, v.width(), v.height());
@@ -218,35 +224,28 @@ fn downsample(src: &[u8], w: u32, h: u32, k: u32) -> Vec<u8> {
 /// Couleur des pièces sans matériau.
 pub const STEEL: [u8; 4] = [0xc9, 0xcc, 0xd1, 0xff];
 
-/// Teinte de sélection : couleur de la pièce mêlée d'accent, pour garder la lecture des volumes.
-fn selection_tint(base: [u8; 4], accent: [u8; 4]) -> [u8; 4] {
-    let m = |a: u8, b: u8| ((a as f32) * 0.45 + (b as f32) * 0.55).round() as u8;
-    [m(base[0], accent[0]), m(base[1], accent[1]), m(base[2], accent[2]), 255]
+/// Couleur d'accent en sRGB 8 bits (teinte de la pièce sélectionnée, appliquée par les nuanceurs).
+pub fn to_srgb8(c: obv_ui::Color) -> [u8; 4] {
+    let h = c.to_hex();
+    [(h >> 16) as u8, (h >> 8) as u8, h as u8, 255]
 }
 
-/// Ce qui change la géométrie envoyée : sélection, visibilité, accent.
+/// Ce qui change la géométrie envoyée : visibilité, arêtes (la sélection passe par les paramètres de l'image).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SceneKey {
-    selected: Option<usize>,
     hidden: Vec<usize>,
-    accent: [u8; 4],
     edges: bool,
 }
 
 impl SceneKey {
-    pub fn new(state: &AppState, accent: [u8; 4], edges: bool) -> Self {
+    pub fn new(state: &AppState, edges: bool) -> Self {
         let hidden = state.parts.iter().enumerate().filter(|(_, p)| !p.visible).map(|(i, _)| i).collect();
-        SceneKey { selected: state.selected, hidden, accent, edges }
+        SceneKey { hidden, edges }
     }
 }
 
-/// Géométrie visible ; la pièce sélectionnée prend la couleur d'accent.
-pub fn mesh_inputs<'a>(
-    model: &'a Model,
-    state: &AppState,
-    accent: [u8; 4],
-    edges: Option<&'a EdgeCache>,
-) -> Vec<MeshInput<'a>> {
+/// Géométrie visible, matériaux par plage d'indices (D-37).
+pub fn mesh_inputs<'a>(model: &'a Model, state: &AppState, edges: Option<&'a EdgeCache>) -> Vec<MeshInput<'a>> {
     model
         .parts
         .iter()
@@ -255,11 +254,10 @@ pub fn mesh_inputs<'a>(
         .map(|(i, p)| MeshInput {
             positions: &p.mesh.positions,
             normals: &p.mesh.normals,
+            uvs: &p.mesh.uvs,
             indices: &p.mesh.indices,
-            color: {
-                let base = model.display_color(i).unwrap_or(STEEL);
-                if state.selected == Some(i) { selection_tint(base, accent) } else { base }
-            },
+            material: 0,
+            groups: p.mesh.submeshes.iter().map(|g| (g.first, g.count, crate::materials::index(g.material))).collect(),
             id: i as u32,
             edges: edges.and_then(|e| e.0.get(i)).map(Vec::as_slice).unwrap_or(&[]),
         })
@@ -284,11 +282,13 @@ impl OffscreenFrame {
     }
 
     /// Envoie la géométrie visible ; la pièce sélectionnée prend la couleur d'accent.
-    pub fn set_model(&mut self, model: &Model, state: &AppState, accent: [u8; 4]) -> Result<()> {
+    pub fn set_model(&mut self, model: &Model, state: &AppState) -> Result<()> {
         if state.inspector != Inspector::Off && self.edges.is_none() {
             self.edges = Some(EdgeCache::compute(model));
         }
-        let meshes = mesh_inputs(model, state, accent, self.edges.as_ref());
+        let m = crate::materials::prepare(model);
+        self.scene.set_materials(&m.table, &m.textures)?;
+        let meshes = mesh_inputs(model, state, self.edges.as_ref());
         self.scene.set_meshes(&meshes)
     }
 
@@ -343,17 +343,15 @@ impl GlOffscreenFrame {
         Ok(GlOffscreenFrame { target: Some(target), scene: Some(scene), ui: Some(ui), headless, edges: None })
     }
 
-    pub fn set_model(
-        &mut self,
-        model: &Model,
-        state: &AppState,
-        accent: [u8; 4],
-    ) -> std::result::Result<(), obv_gl::GlError> {
+    pub fn set_model(&mut self, model: &Model, state: &AppState) -> std::result::Result<(), obv_gl::GlError> {
         if state.inspector != Inspector::Off && self.edges.is_none() {
             self.edges = Some(EdgeCache::compute(model));
         }
-        let meshes = mesh_inputs(model, state, accent, self.edges.as_ref());
-        self.scene.as_mut().unwrap().set_meshes(&self.headless.device, &meshes)
+        let m = crate::materials::prepare(model);
+        let scene = self.scene.as_mut().unwrap();
+        scene.set_materials(&self.headless.device, &m.table, &m.textures)?;
+        let meshes = mesh_inputs(model, state, self.edges.as_ref());
+        scene.set_meshes(&self.headless.device, &meshes)
     }
 
     /// Environnement d'éclairage (D-33).

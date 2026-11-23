@@ -24,6 +24,7 @@ use winit::{
     window::{CursorIcon, Theme as WinTheme, Window, WindowId},
 };
 
+use crate::materials::Prepared;
 use crate::{
     convert_ui::{Request, Status},
     frame::{EdgeCache, SceneKey, mesh_inputs},
@@ -60,7 +61,7 @@ struct Pending {
 #[derive(Debug, Clone, Copy)]
 pub struct Wake;
 
-type Loaded = (PathBuf, Result<Model, String>);
+type Loaded = (PathBuf, Result<(Model, Prepared), String>);
 
 /// Réponses du fil des mises à jour (D-32).
 enum UpdateMsg {
@@ -80,7 +81,10 @@ pub struct App {
     loading: Option<(Receiver<Loaded>, Arc<Progress>, Instant)>,
     /// Modèle lu, installé à l'image suivante : la carte d'ouverture montre d'abord « Préparation » (l'envoi au
     /// GPU se fait sur le fil de la fenêtre).
-    ready: Option<(PathBuf, Model, bool)>,
+    ready: Option<(PathBuf, Model, Prepared, bool)>,
+    /// Matériaux du modèle (D-37), envoyés au moteur quand `materials_sent` est faux.
+    materials: Prepared,
+    materials_sent: bool,
     converting: Option<(Receiver<Converted>, Arc<AtomicU32>)>,
     nav: Navigator,
     pending: Pending,
@@ -161,6 +165,8 @@ impl App {
             proxy,
             loading: None,
             ready: None,
+            materials: Prepared::default(),
+            materials_sent: false,
             converting: None,
             nav: Navigator::default(),
             pending: Pending::default(),
@@ -203,7 +209,11 @@ impl App {
         self.state.loading = Some(Loading::new(name));
         let p = progress.clone();
         std::thread::spawn(move || {
-            let r = load_with(&path, &p);
+            // Textures décodées ici, hors du fil de la fenêtre.
+            let r = load_with(&path, &p).map(|m| {
+                let prep = crate::materials::prepare(&m);
+                (m, prep)
+            });
             let _ = tx.send((path, r));
             let _ = proxy.send_event(Wake);
         });
@@ -223,7 +233,7 @@ impl App {
         self.state.loading = None;
     }
 
-    fn finish_open(&mut self, path: PathBuf, m: Model) {
+    fn finish_open(&mut self, path: PathBuf, m: Model, materials: Prepared) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let mut s = AppState::new(&name, &m);
         std::mem::swap(&mut s.settings, &mut self.state.settings);
@@ -243,6 +253,8 @@ impl App {
         s.views.list = self.views.0.get(&self.file_key).cloned().unwrap_or_default();
         self.state = s;
         self.model = Arc::new(m);
+        self.materials = materials;
+        self.materials_sent = false;
         self.scene_key = None;
         self.edges = None;
         self.framed = false;
@@ -419,12 +431,12 @@ impl App {
         self.poll_update();
         self.poll_lighting();
         // Modèle reçu à l'image précédente (carte « Préparation » montrée) : installé maintenant.
-        if let Some((_, _, shown)) = &self.ready
+        if let Some((_, _, _, shown)) = &self.ready
             && *shown
-            && let Some((path, m, _)) = self.ready.take()
+            && let Some((path, m, prep, _)) = self.ready.take()
         {
             self.state.loading = None;
-            self.finish_open(path, m);
+            self.finish_open(path, m, prep);
         }
         if let Some((rx, progress, started)) = &self.loading {
             match rx.try_recv() {
@@ -434,12 +446,12 @@ impl App {
                     }
                     self.loading = None;
                     match r {
-                        Ok(m) => {
+                        Ok((m, prep)) => {
                             if let Some(l) = &mut self.state.loading {
                                 l.stage = Stage::Prepare;
                                 l.fraction = None;
                             }
-                            self.ready = Some((path, m, false));
+                            self.ready = Some((path, m, prep, false));
                         }
                         Err(e) => {
                             self.state.loading = None;
@@ -576,8 +588,7 @@ impl App {
             CaptureSize::Uhd => (3840, (3840.0 * vh as f32 / vw.max(1) as f32).round() as u32),
             _ => size.pixels(vw, vh),
         };
-        let accent = to_srgb8(shell::selection_color(&self.ui.theme));
-        let rgba = gfx.capture(&self.model, &self.state, &self.ui.theme, accent, w, h, transparent)?;
+        let rgba = gfx.capture(&self.model, &self.state, &self.ui.theme, &self.materials, w, h, transparent)?;
         write_png(path, w, h, &rgba).map_err(|e| e.to_string())
     }
 
@@ -699,6 +710,7 @@ impl App {
         let size = self.ui.atlas.size;
         self.ui.atlas.dirty = Some([0, 0, size, size]);
         self.scene_key = None;
+        self.materials_sent = false;
         Ok(())
     }
 
@@ -925,14 +937,21 @@ impl App {
         }
         let Some(gfx) = &mut self.gfx else { return };
 
-        // Géométrie : envoyée seulement quand la sélection, la visibilité ou l'accent changent.
-        let accent = to_srgb8(shell::selection_color(&self.ui.theme));
+        // Matériaux : envoyés à l'ouverture et au changement de moteur.
+        if !self.materials_sent {
+            if let Err(e) = gfx.set_materials(&self.materials) {
+                self.error = Some(e);
+            }
+            self.materials_sent = true;
+        }
+        // Géométrie : envoyée seulement quand la visibilité ou les arêtes changent (sélection et accent passent
+        // par les paramètres de l'image, D-37).
         if self.state.inspector != Inspector::Off && self.edges.is_none() {
             self.edges = Some(EdgeCache::compute(&self.model));
         }
-        let key = SceneKey::new(&self.state, accent, self.edges.is_some());
+        let key = SceneKey::new(&self.state, self.edges.is_some());
         if self.scene_key.as_ref() != Some(&key) {
-            let meshes = mesh_inputs(&self.model, &self.state, accent, self.edges.as_ref());
+            let meshes = mesh_inputs(&self.model, &self.state, self.edges.as_ref());
             if let Err(e) = gfx.set_meshes(&meshes) {
                 self.error = Some(e);
             }
@@ -944,9 +963,9 @@ impl App {
         }
         // La carte « Préparation » est à l'écran : le modèle sera installé à l'image suivante.
         if let Some(r) = &mut self.ready
-            && !r.2
+            && !r.3
         {
-            r.2 = true;
+            r.3 = true;
             gfx.window.request_redraw();
         }
         if let Some(e) = self.error.take() {
@@ -1033,11 +1052,6 @@ fn with_app_id(attrs: winit::window::WindowAttributes) -> winit::window::WindowA
 /// Secondes depuis 1970.
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
-fn to_srgb8(c: obv_ui::Color) -> [u8; 4] {
-    let h = c.to_hex();
-    [(h >> 16) as u8, (h >> 8) as u8, h as u8, 255]
 }
 
 fn map_key(code: PhysicalKey, logical: &winit::keyboard::Key) -> Option<Key> {

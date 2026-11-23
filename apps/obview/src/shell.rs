@@ -163,7 +163,7 @@ impl AppState {
             search: String::new(),
             camera: Camera::default(),
             inspector: Inspector::Off,
-            inspector_cuts: inspector::target_cuts(Inspector::Off),
+            inspector_cuts: inspector::target_cuts(Inspector::Off, &Default::default()),
             left_open: false,
             reveal: None,
             update: Default::default(),
@@ -358,11 +358,8 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let c = ui.theme.color.clone();
     let m = ui.theme.size.clone();
     let theme_id = Id::new("thème");
-    let logo = Node::stack().size(Size::Px(24.0), Size::Px(24.0)).radius(6.0).bg(c.accent).child(Node::icon(
-        "obview",
-        21.0,
-        c.accent_text,
-    ));
+    // Logo (D-36) : version claire sur le thème sombre, version sombre sur le thème clair.
+    let logo = Node::image(if ui.theme.kind == ThemeKind::Dark { "obview-clair" } else { "obview-sombre" }, 24.0);
     let file = Node::row()
         .id(Id::new("fichier"))
         .tooltip(tr("Fichiers récents"))
@@ -764,8 +761,8 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     ui.reduce_motion = !s.settings.animations;
     let m = ui.theme.size.clone();
     let c = ui.theme.color.clone();
-    // Vues de rendu : les bandes entrent depuis la droite, un rendu choisi s'élargit à toute la vue (350 ms).
-    let target = inspector::target_cuts(s.inspector);
+    // Vues de rendu : les bandes entrent depuis la gauche, un rendu choisi s'élargit à toute la vue (350 ms).
+    let target = inspector::targets(s);
     for (k, t) in target.iter().enumerate() {
         s.inspector_cuts[k] = ui.tween(Id::new("inspecteur limite").with(k), *t, 350.0);
     }

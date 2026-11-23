@@ -5,16 +5,20 @@
 
 #ifdef OBV_GL
 layout(binding = 1) uniform sampler2D env_map;
+layout(binding = 2) uniform sampler2DArray textures;
 #else
 layout(set = 0, binding = 0) uniform sampler2D env_map;
+layout(set = 0, binding = 1) uniform sampler2DArray textures;
 #endif
 #define LIGHT PARAMS
 #include "light.glsl"
 
 layout(location = 0) in vec3 v_normal;
 layout(location = 1) in vec3 v_world;
-layout(location = 2) in flat uint v_color;
+layout(location = 2) in flat uint v_material;
 layout(location = 3) in vec3 v_bary;
+layout(location = 4) in vec2 v_uv;
+layout(location = 5) in flat uint v_part;
 layout(location = 0) out vec4 out_color;
 
 vec3 srgb_to_linear(vec3 c) {
@@ -23,7 +27,26 @@ vec3 srgb_to_linear(vec3 c) {
 
 void main() {
     if (outside_band(gl_FragCoord.xy)) discard;
-    vec3 base = srgb_to_linear(unpackUnorm4x8(v_color).rgb);
+    // Matériau (D-37) : facteurs, puis textures de couleur (sRGB) et métal-rugosité (B, G ; linéaires).
+    Material mat = MATERIAL(v_material);
+    vec3 base = mat.base.rgb;
+    float metal = mat.metallic;
+    float rough = mat.roughness;
+    if (mat.base_tex >= 0) {
+        base *= srgb_to_linear(texture(textures, vec3(v_uv, float(mat.base_tex))).rgb);
+    }
+    if (mat.mr_tex >= 0) {
+        vec4 mr = texture(textures, vec3(v_uv, float(mat.mr_tex)));
+        rough *= mr.g;
+        metal *= mr.b;
+    }
+    metal = clamp(metal, 0.0, 1.0);
+    rough = clamp(rough, 0.0, 1.0);
+    // Pièce sélectionnée : teinte d'accent.
+    if (v_part == PARAMS.selected) {
+        base = mix(base, srgb_to_linear(unpackUnorm4x8(PARAMS.accent).rgb), 0.55);
+        metal *= 0.45;
+    }
     vec3 n = normalize(v_normal);
     vec3 v = to_eye(v_world);
 #ifdef SECTION
@@ -41,8 +64,15 @@ void main() {
 #endif
     if (!gl_FrontFacing) n = -n;
     vec3 color;
-    if (pc.mode == MODE_COLOR) {
-        color = base;
+    if (pc.mode == MODE_ALBEDO) {
+        // Albédo du flux spéculaire (Marmoset) : la part diffuse de la couleur.
+        color = base * (1.0 - metal);
+    } else if (pc.mode == MODE_REFLECTIVITY) {
+        // Couleur spéculaire à incidence normale, telle quelle.
+        color = mix(vec3(0.04), base, metal);
+    } else if (pc.mode == MODE_GLOSS) {
+        // Brillance affichée comme une carte de données : la valeur codée est 1 - rugosité.
+        color = srgb_to_linear(vec3(1.0 - rough));
     } else if (pc.mode == MODE_NORMALS) {
         // Normale du monde affichée telle quelle : la cible sRGB réencode, d'où la conversion.
         color = srgb_to_linear(n * 0.5 + 0.5);
@@ -59,7 +89,7 @@ void main() {
         float shade = 0.82 + 0.18 * max(dot(n, v), 0.0);
         color = vec3(0.92) * shade;
     } else {
-        color = shade(base, n, v);
+        color = shade_pbr(base, metal, rough, mat.emissive, n, v);
     }
     out_color = vec4(color, 1.0);
 }

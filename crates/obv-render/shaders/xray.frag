@@ -4,7 +4,7 @@
 
 layout(location = 0) in vec3 v_normal;
 layout(location = 1) in vec3 v_world;
-layout(location = 2) in flat uint v_color;
+layout(location = 2) in flat uint v_material;
 layout(location = 3) in vec3 v_bary;
 layout(location = 0) out vec4 out_color;
 

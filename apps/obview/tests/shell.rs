@@ -98,9 +98,9 @@ fn check_reference(name: &str, w: u32, h: u32, rgba: &[u8]) {
 /// Rend une capture : une image pour la mise en page, puis le survol éventuel, puis l'image finale.
 fn capture(gpu: &Gpu, model: &Model, file_name: &str, shot: &Shot<'_>) -> Vec<u8> {
     let (w, h) = shot.size;
-    let (mut ui, state, accent) = prepare(model, file_name, shot);
+    let (mut ui, state) = prepare(model, file_name, shot);
     let mut f = OffscreenFrame::new(gpu, w, h).unwrap();
-    f.set_model(model, &state, accent).unwrap();
+    f.set_model(model, &state).unwrap();
     if let Some(env) = &state.lighting.env {
         f.set_environment(env).unwrap();
     }
@@ -119,8 +119,8 @@ fn capture_gl(model: &Model, file_name: &str, shot: &Shot<'_>) -> Option<Vec<u8>
             return None;
         }
     };
-    let (mut ui, state, accent) = prepare(model, file_name, shot);
-    f.set_model(model, &state, accent).unwrap();
+    let (mut ui, state) = prepare(model, file_name, shot);
+    f.set_model(model, &state).unwrap();
     if let Some(env) = &state.lighting.env {
         f.set_environment(env).unwrap();
     }
@@ -142,7 +142,7 @@ fn environment(key: &str) -> std::sync::Arc<obv_render::light::Environment> {
     c.entry(key.to_string()).or_insert_with(|| Arc::new(obview::lighting::build(key, None).unwrap())).clone()
 }
 
-fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState, [u8; 4]) {
+fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState) {
     let (w, h) = shot.size;
     let logical = vec2(w as f32 / shot.scale, h as f32 / shot.scale);
     let mut state = AppState::new(file_name, model);
@@ -199,10 +199,7 @@ fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState, [u
         frame(&mut ui, &mut state, t + 1.5, pointer, false);
         frame(&mut ui, &mut state, t + 2.5, pointer, false);
     }
-    let a = shell::selection_color(&ui.theme);
-    let to8 =
-        |c: f32| (if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 } * 255.0).round() as u8;
-    (ui, state, [to8(a.r), to8(a.g), to8(a.b), 255])
+    (ui, state)
 }
 
 fn shoot(gpu: &Gpu, model: &Model, shots: &[Shot<'_>]) {
@@ -294,7 +291,7 @@ fn reglages_barre_et_affichage() {
     let bar = Shot {
         setup: |s| {
             s.settings_open = true;
-            s.settings_section = 3;
+            s.settings_section = 4;
             s.settings.toolbar_hidden = vec![obview::settings::ToolButton::Capture];
         },
         ..Default::default()
@@ -310,6 +307,17 @@ fn reglages_barre_et_affichage() {
         ..Default::default()
     };
     shoot(&gpu, &model, &both(display, "reglages_affichage_sombre", "reglages_affichage_claire"));
+    // Vues de rendu (D-37) : les cinq de Marmoset par défaut, info-bulle d'une vue.
+    let views = Shot {
+        setup: |s| {
+            s.settings_open = true;
+            s.settings_section = 3;
+        },
+        hover: Some(Id::new("réglages").with("vue nom").with("gloss")),
+        tooltip: Some(Id::new("réglages").with("vue nom").with("gloss")),
+        ..Default::default()
+    };
+    shoot(&gpu, &model, &both(views, "reglages_vues_sombre", "reglages_vues_claire"));
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
@@ -396,7 +404,7 @@ fn mises_a_jour_deux_themes() {
     let settings = Shot {
         setup: |s| {
             s.settings_open = true;
-            s.settings_section = 4;
+            s.settings_section = 5;
             s.app_version = "0.2.1";
             s.update = Status::Available(release());
         },
@@ -417,7 +425,7 @@ fn mises_a_jour_deux_themes() {
     let current = Shot {
         setup: |s| {
             s.settings_open = true;
-            s.settings_section = 4;
+            s.settings_section = 5;
             s.app_version = "0.2.1";
             s.update = Status::Current;
         },
@@ -512,7 +520,9 @@ fn capture_transparente() {
         state.camera.frame(lo, hi, 640.0 / 360.0);
     }
     let theme = shell::theme(&state);
-    let rgba = obview::frame::capture(&gpu, &model, &state, &theme, [80, 140, 255, 255], 640, 360, true).unwrap();
+    let rgba =
+        obview::frame::capture(&gpu, &model, &state, &theme, &obview::materials::prepare(&model), 640, 360, true)
+            .unwrap();
     assert_eq!(rgba.len(), 640 * 360 * 4);
     assert_eq!(rgba[3], 0, "coin transparent");
     let center = (180 * 640 + 320) * 4;
@@ -540,7 +550,7 @@ fn reglages_liste_ouverte() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
-/// Vues de rendu (D-15) : bandes, puis deux rendus isolés.
+/// Vues de rendu (D-15, D-37) : bandes, puis trois rendus isolés.
 #[test]
 fn inspecteur_deux_themes() {
     use obv_render::RenderMode;
@@ -551,7 +561,16 @@ fn inspecteur_deux_themes() {
     shoot(&gpu, &model, &both(bands, "inspecteur_sombre", "inspecteur_clair"));
     let topo = Shot { setup: |s| s.inspector = Inspector::Single(RenderMode::Topology), ..Default::default() };
     let edges = Shot { setup: |s| s.inspector = Inspector::Single(RenderMode::Edges), ..Default::default() };
-    shoot(&gpu, &model, &[Shot { name: "inspecteur_topologie", ..topo }, Shot { name: "inspecteur_aretes", ..edges }]);
+    let gloss = Shot { setup: |s| s.inspector = Inspector::Single(RenderMode::Gloss), ..Default::default() };
+    shoot(
+        &gpu,
+        &model,
+        &[
+            Shot { name: "inspecteur_topologie", ..topo },
+            Shot { name: "inspecteur_aretes", ..edges },
+            Shot { name: "inspecteur_brillance", ..gloss },
+        ],
+    );
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
@@ -762,15 +781,33 @@ fn captures_fichier_local() {
         .and_then(|v| v.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))))
         .unwrap_or((3840u32, 2160u32));
     let scale = std::env::var("OBV_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
-    let panels = std::env::var_os("OBV_PANELS").is_some();
+    // Vues de rendu : `OBV_INSPECTOR=bands` ou la clé d'un rendu (`gloss`, `albedo`…).
     for (n, theme) in [("local_sombre", ThemeKind::Dark), ("local_clair", ThemeKind::Light)] {
         let mut shot = Shot { name: n, theme, select, size: (w, h), scale, ..Default::default() };
-        if panels {
-            shot.setup = |s| {
+        shot.setup = |s| {
+            if std::env::var_os("OBV_PANELS").is_some() {
                 s.left_open = true;
                 s.right_open = true;
-            };
-        }
+            }
+            use obview::inspector::Inspector;
+            match std::env::var("OBV_INSPECTOR").as_deref() {
+                Ok("bands") => s.inspector = Inspector::Bands,
+                Ok(k) => {
+                    if let Some(m) = obv_render::RenderMode::from_key(k) {
+                        s.inspector = Inspector::Single(m);
+                    }
+                }
+                Err(_) => {}
+            }
+        };
+        // Moteur OpenGL : `OBV_GL=1`.
+        #[cfg(target_os = "linux")]
+        let img = if std::env::var_os("OBV_GL").is_some() {
+            capture_gl(&model, &name, &shot).expect("OpenGL sans fenêtre indisponible")
+        } else {
+            capture(&gpu, &model, &name, &shot)
+        };
+        #[cfg(not(target_os = "linux"))]
         let img = capture(&gpu, &model, &name, &shot);
         save_png(&out_dir().join(format!("{n}.png")), w, h, &img);
     }

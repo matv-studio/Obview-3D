@@ -526,3 +526,45 @@ la rotation Z → Y est faite à la lecture. Demande : « implémente aussi tes 
 - En suspens, après validation des maquettes : options de la fenêtre Convertir (Structure, Pièces, Ignorer sous,
   Pièces cachées, Angle max), retrait des pièces invisibles de l'extérieur (rendus d'identifiants depuis de
   nombreuses directions).
+
+## D-36 · Logo « V » (23/11/2026)
+
+Après les propositions (lentille, D-34 ; cubes et sphères), l'utilisateur a choisi une sphère creusée d'un sillon en V,
+redessinée en vectoriel d'après sa référence puis retouchée par lui : versions claire et sombre validées
+(`crates/obv-ui/assets/images/obview-clair.svg`, `obview-sombre.svg`, fichiers de l'utilisateur, à ne pas
+redessiner).
+
+- Icônes de l'application : `tools/icones.py` les tire du SVG clair (ICO rendu à chaque taille, ICNS au gabarit
+  Apple de 824 px sur 1024, PNG 256, SVG copié).
+- Barre du haut : le logo lui-même (24 px), version claire sur le thème sombre, sombre sur le thème clair. La
+  bibliothèque d'interface reçoit pour cela les images en couleurs (`Node::image`) : rendues au pixel exact par
+  resvg, rangées dans l'atlas 8 bits existant en quatre plans (R, V, B en sRGB non prémultiplié, alpha) lus par
+  une primitive `KIND_IMAGE` ; ni texture ni liaison supplémentaire, dans Vulkan comme dans OpenGL.
+- L'icône « lentille » de D-34 est retirée.
+
+## D-37 · Matériaux des fichiers et vues de rendu de Marmoset Viewer (23/11/2026)
+
+Demande : « rapproche toi le plus possible de ce que fait marmoset viewer », vues par défaut identiques, réglage pour
+ajouter ou retirer des vues, icône « //// ». Vérifié sur le code de la visionneuse (marmoset.js) : rendus Normals,
+Albedo, Reflectivity, Gloss, Topology ; cinq traits à −0,6 … 0,6 en coordonnées normalisées ; inclinaison
+`x + 0,25 y` constante ; la bande à gauche du trait `d` montre le rendu `d`, la vue éclairée est à droite du
+dernier ; un rendu choisi repousse les traits avant lui à gauche, les autres à droite.
+
+- Albédo, Réflectivité et Brillance n'ont de sens qu'avec les matériaux du fichier : le rendu les reçoit désormais
+  (couleur de base, métal, rugosité, émission, textures de couleur et de métal-rugosité). Table de matériaux
+  (48 octets par matériau, matériau 0 : l'acier satiné des pièces sans matériau), indice par sommet (sommets
+  dupliqués aux frontières de matériaux), coordonnées de texture, tableau de textures RGBA8 (carrées, puissance
+  de deux, 2048 au plus, budget mémoire de 512 Mo réduisant la taille ; niveaux de mip moyennés en linéaire pour
+  les textures de couleur). Textures décodées dans le fil de lecture. Vulkan et OpenGL identiques.
+- Formules (Marmoset) : Albédo = base × (1 − métal) ; Réflectivité = mélange(0,04, base, métal) ; Brillance =
+  1 − rugosité, carte brute. La vue éclairée utilise le même modèle PBR qu'avant, avec les valeurs du matériau.
+- La teinte de sélection passe par les paramètres de l'image (pièce et accent) : plus de renvoi de géométrie au
+  clic.
+- Positions générales pour `n` vues : écart `e = 1 / (n − 1 + 8/3)`, premier trait à `4/3 · e` du bord (cinq vues :
+  positions de Marmoset). Inclinaison suivant les proportions de la vue. Noms à gauche de leur trait.
+- Réglages : rubrique « Vues de rendu », une bascule par vue (Rayons X et Arêtes, propres à Obview, éteintes par
+  défaut) ; la dernière vue ne peut être retirée ; l'ordre des bandes est fixe.
+- Icône du bouton : quatre traits penchés.
+
+En suspens : textures normales et occlusion (lues par les lecteurs, pas encore utilisées au rendu), ordre des
+vues réglable.

@@ -2,7 +2,10 @@
 #![cfg(target_os = "linux")]
 
 use obv_gl::{GlScene, GlTarget, headless::Headless};
-use obv_render::{Band, Camera, MeshInput, RenderMode, SceneParams};
+use obv_render::{
+    Band, Camera, MeshInput, RenderMode, SceneParams,
+    materials::{GpuMaterial, TextureArray},
+};
 
 fn cube() -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>) {
     let mut p = Vec::new();
@@ -46,12 +49,19 @@ fn cube_trace_et_selectionne() {
     eprintln!("{}, glClipControl : {}", dev.description, dev.clip_control);
     let (p, n, i) = cube();
     let mut scene = GlScene::new(dev).unwrap();
-    scene
-        .set_meshes(
-            dev,
-            &[MeshInput { positions: &p, normals: &n, indices: &i, color: [200, 60, 60, 255], id: 7, edges: &[] }],
-        )
-        .unwrap();
+    let table = [GpuMaterial::satin([255; 4]), GpuMaterial::satin([200, 60, 60, 255])];
+    scene.set_materials(dev, &table, &TextureArray::empty()).unwrap();
+    let mesh = MeshInput {
+        positions: &p,
+        normals: &n,
+        uvs: &[],
+        indices: &i,
+        material: 1,
+        groups: Vec::new(),
+        id: 7,
+        edges: &[],
+    };
+    scene.set_meshes(dev, &[mesh]).unwrap();
     let mut cam = Camera::default();
     cam.frame([-1.0; 3], [1.0; 3], 1.0);
     let target = GlTarget::new(dev, 64, 64).unwrap();
@@ -59,10 +69,10 @@ fn cube_trace_et_selectionne() {
     scene.set_params(dev, &cam, &SceneParams::default());
     let rect = [0.0, 0.0, 64.0, 64.0];
     scene.draw_background_band(dev, rect, 64, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], Band::ALL);
-    scene.draw_scene(dev, rect, 64, &cam, RenderMode::Color, Band::ALL);
+    scene.draw_scene(dev, rect, 64, &cam, RenderMode::Albedo, Band::ALL);
     let img = target.read_rgba8(dev);
     let px = |x: usize, y: usize| &img[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
-    // Centre : la couleur du cube ; coin : le fond bleu.
+    // Centre : la couleur de base du cube (albédo) ; coin : le fond bleu.
     assert_eq!(px(32, 32)[..3], [200, 60, 60], "{:?}", px(32, 32));
     assert!(px(1, 1)[2] > 200 && px(1, 1)[0] < 20, "{:?}", px(1, 1));
     let hit = scene.pick(dev, &cam, [64.0, 64.0], [32.0, 32.0]).expect("rien sous le centre");

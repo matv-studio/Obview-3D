@@ -88,6 +88,8 @@ pub struct Image {
     pub aspect: vk::ImageAspectFlags,
     /// Niveaux de détail (1 : image simple).
     pub mip_levels: u32,
+    /// Couches (tableau de textures) ; 1 : image simple.
+    pub layers: u32,
 }
 
 impl Image {
@@ -112,6 +114,36 @@ impl Image {
         usage: vk::ImageUsageFlags,
         aspect: vk::ImageAspectFlags,
     ) -> Result<Self> {
+        Self::create(gpu, name, format, extent, mip_levels, 1, false, usage, aspect)
+    }
+
+    /// Tableau de `layers` images de même taille, `mip_levels` niveaux chacune (vue `TYPE_2D_ARRAY`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn array(
+        gpu: &Gpu,
+        name: &str,
+        format: vk::Format,
+        extent: vk::Extent2D,
+        mip_levels: u32,
+        layers: u32,
+        usage: vk::ImageUsageFlags,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<Self> {
+        Self::create(gpu, name, format, extent, mip_levels, layers.max(1), true, usage, aspect)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create(
+        gpu: &Gpu,
+        name: &str,
+        format: vk::Format,
+        extent: vk::Extent2D,
+        mip_levels: u32,
+        layers: u32,
+        array_view: bool,
+        usage: vk::ImageUsageFlags,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<Self> {
         let d = gpu.device();
         let mip_levels = mip_levels.max(1);
         let raw = unsafe {
@@ -121,7 +153,7 @@ impl Image {
                     .format(format)
                     .extent(vk::Extent3D { width: extent.width, height: extent.height, depth: 1 })
                     .mip_levels(mip_levels)
-                    .array_layers(1)
+                    .array_layers(layers)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
                     .usage(usage)
@@ -145,17 +177,28 @@ impl Image {
             }
         };
         unsafe { d.bind_image_memory(raw, allocation.memory(), allocation.offset())? };
+        // Une image créée par `array` est vue comme un tableau, même d'une seule couche.
         let view = unsafe {
             d.create_image_view(
                 &vk::ImageViewCreateInfo::default()
                     .image(raw)
-                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .view_type(if array_view { vk::ImageViewType::TYPE_2D_ARRAY } else { vk::ImageViewType::TYPE_2D })
                     .format(format)
-                    .subresource_range(subresource(aspect).level_count(mip_levels)),
+                    .subresource_range(subresource(aspect).level_count(mip_levels).layer_count(layers)),
                 None,
             )?
         };
-        Ok(Self { gpu: gpu.clone(), raw, view, allocation: Some(allocation), format, extent, aspect, mip_levels })
+        Ok(Self {
+            gpu: gpu.clone(),
+            raw,
+            view,
+            allocation: Some(allocation),
+            format,
+            extent,
+            aspect,
+            mip_levels,
+            layers,
+        })
     }
 
     /// Barrière de changement de disposition (synchronization2).
@@ -175,7 +218,7 @@ impl Image {
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(self.raw)
-            .subresource_range(subresource(self.aspect).level_count(self.mip_levels))];
+            .subresource_range(subresource(self.aspect).level_count(self.mip_levels).layer_count(self.layers))];
         unsafe {
             self.gpu.device().cmd_pipeline_barrier2(cmd, &vk::DependencyInfo::default().image_memory_barriers(&b))
         };

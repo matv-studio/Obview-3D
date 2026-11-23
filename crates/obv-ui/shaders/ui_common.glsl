@@ -39,3 +39,4 @@ const uint KIND_SHADOW = 1u;
 const uint KIND_COVERAGE = 2u;
 const uint KIND_LINE = 3u;
 const uint KIND_QUAD = 4u;
+const uint KIND_IMAGE = 5u;

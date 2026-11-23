@@ -4,30 +4,56 @@
 mod edges;
 mod env_gpu;
 pub mod light;
+pub mod materials;
 
 pub use edges::feature_edges;
 use obv_gpu::{Buffer, Gpu, GraphicsPipeline, Image, MemoryLocation, PipelineDesc, Result, ShaderStages, spirv, vk};
 
-/// Rendus de la vue 3D (D-15).
+/// Rendus de la vue 3D (D-15, D-37). Les valeurs sont celles que lisent les nuanceurs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderMode {
     Lit = 0,
-    Color = 1,
+    /// Couleur diffuse du flux spéculaire (couleur de base × (1 - métal)), comme la visionneuse Marmoset.
+    Albedo = 1,
     Normals = 2,
     Topology = 3,
     XRay = 4,
     Edges = 5,
+    /// Couleur spéculaire à incidence normale (F0 : 0,04 pour un diélectrique, couleur de base pour un métal).
+    Reflectivity = 6,
+    /// Brillance : 1 - rugosité.
+    Gloss = 7,
 }
 
 impl RenderMode {
-    pub const ALL: [RenderMode; 6] = [
-        RenderMode::Lit,
-        RenderMode::Color,
+    /// Vues de rendu de l'inspecteur, dans l'ordre des bandes (celui de Marmoset, puis les vues d'Obview).
+    pub const VIEWS: [RenderMode; 7] = [
         RenderMode::Normals,
+        RenderMode::Albedo,
+        RenderMode::Reflectivity,
+        RenderMode::Gloss,
         RenderMode::Topology,
         RenderMode::XRay,
         RenderMode::Edges,
     ];
+
+    /// Clé stable (réglages).
+    pub fn key(self) -> &'static str {
+        match self {
+            RenderMode::Lit => "lit",
+            RenderMode::Albedo => "albedo",
+            RenderMode::Normals => "normals",
+            RenderMode::Topology => "topology",
+            RenderMode::XRay => "xray",
+            RenderMode::Edges => "edges",
+            RenderMode::Reflectivity => "reflectivity",
+            RenderMode::Gloss => "gloss",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::VIEWS.into_iter().chain([RenderMode::Lit]).find(|m| m.key() == k)
+    }
 }
 
 /// Bande de l'inspecteur : fragments gardés si `lo <= dot(pixel, normal) < hi` (pixels de la cible).
@@ -297,6 +323,13 @@ struct ParamsHeader {
     flags: u32,
     plane: [f32; 4],
     light: light::LightBlock,
+    /// Matériaux et coordonnées de texture (adresses Vulkan ; OpenGL les lie à part : zéro).
+    materials: u64,
+    uvs: u64,
+    /// Rang dans le tracé de la pièce sélectionnée (u32::MAX : aucune), couleur d'accent sRGB 8 bits.
+    selected: u32,
+    accent: u32,
+    pad: [u32; 2],
 }
 
 /// Réglages de la scène pour une image : coupe et vue éclatée.
@@ -308,6 +341,9 @@ pub struct SceneParams<'a> {
     pub offsets: &'a [[f32; 3]],
     /// Éclairage de l'image (D-33).
     pub light: light::LightBlock,
+    /// Pièce sélectionnée (`MeshInput::id`), teintée de `accent` (sRGB 8 bits).
+    pub selected: Option<u32>,
+    pub accent: [u8; 4],
 }
 
 /// Anneau de tampons de paramètres : une image en cours d'exécution n'est jamais réécrite.
@@ -317,9 +353,13 @@ const PARAM_SLOTS: usize = 4;
 pub struct MeshInput<'a> {
     pub positions: &'a [[f32; 3]],
     pub normals: &'a [[f32; 3]],
+    /// Coordonnées de texture (vide : aucune).
+    pub uvs: &'a [[f32; 2]],
     pub indices: &'a [u32],
-    /// Couleur sRGB 8 bits (R, G, B, A).
-    pub color: [u8; 4],
+    /// Matériau (indice dans la table de [`SceneRenderer::set_materials`]) des indices hors de `groups`.
+    pub material: u32,
+    /// Plages d'indices à matériau propre : premier indice, nombre d'indices, matériau.
+    pub groups: Vec<(u32, u32, u32)>,
     /// Identifiant rendu par la sélection au pixel (indice de la pièce).
     pub id: u32,
     /// Arêtes à tracer (groupes de quatre points), voir [`feature_edges`].
@@ -347,8 +387,9 @@ struct Geometry {
     positions: Buffer,
     normals: Buffer,
     indices: Buffer,
-    /// Par sommet : couleur, rang de la géométrie dans le tracé.
+    /// Par sommet : matériau, rang de la géométrie dans le tracé.
     attrs: Buffer,
+    uvs: Buffer,
     index_count: u32,
     edges: Option<(Buffer, Buffer)>,
     edge_count: u32,
@@ -371,6 +412,8 @@ struct ParamsData {
     section: Option<[f32; 4]>,
     offsets: Vec<[f32; 4]>,
     light: light::LightBlock,
+    selected: u32,
+    accent: u32,
     /// Caméra de la dernière image (directions du fond).
     camera: Camera,
 }
@@ -381,10 +424,18 @@ impl ParamsData {
             .iter()
             .map(|&id| p.offsets.get(id as usize).map(|o| [o[0], o[1], o[2], 0.0]).unwrap_or([0.0; 4]))
             .collect();
-        ParamsData { section: p.section, offsets, light: p.light, camera: Camera::default() }
+        let selected = p.selected.and_then(|id| ids.iter().position(|i| *i == id)).map(|k| k as u32);
+        ParamsData {
+            section: p.section,
+            offsets,
+            light: p.light,
+            selected: selected.unwrap_or(u32::MAX),
+            accent: u32::from_le_bytes(p.accent),
+            camera: Camera::default(),
+        }
     }
 
-    fn encode(&self, camera: &Camera) -> Vec<u8> {
+    fn encode(&self, camera: &Camera, materials: u64, uvs: u64) -> Vec<u8> {
         let eye = camera.eye();
         let f = camera.forward();
         let header = ParamsHeader {
@@ -394,6 +445,11 @@ impl ParamsData {
             flags: self.section.is_some() as u32,
             plane: self.section.unwrap_or([0.0, 0.0, 0.0, 0.0]),
             light: self.light,
+            materials,
+            uvs,
+            selected: self.selected,
+            accent: self.accent,
+            pad: [0; 2],
         };
         let mut bytes = bytemuck::bytes_of(&header).to_vec();
         if self.offsets.is_empty() {
@@ -495,6 +551,8 @@ pub struct SceneRenderer {
     geometry: Option<Geometry>,
     params: std::cell::RefCell<ParamRing>,
     env: env_gpu::EnvBinding,
+    /// Table des matériaux (D-37).
+    materials: Buffer,
 }
 
 const PICK_FORMAT: vk::Format = vk::Format::R32G32_UINT;
@@ -617,7 +675,53 @@ impl SceneRenderer {
             geometry: None,
             params: std::cell::RefCell::new(ParamRing::new(gpu, 1)?),
             env,
+            materials: Buffer::with_data(
+                gpu,
+                "matériaux",
+                bytemuck::bytes_of(&materials::GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff])),
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+            )?,
         })
+    }
+
+    /// Remplace la table des matériaux et le tableau de leurs textures (D-37) ; l'appareil est attendu.
+    pub fn set_materials(
+        &mut self,
+        table: &[materials::GpuMaterial],
+        textures: &materials::TextureArray,
+    ) -> Result<()> {
+        let fallback = [materials::GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff])];
+        let table = if table.is_empty() { &fallback[..] } else { table };
+        unsafe { self.gpu.device().device_wait_idle()? };
+        self.materials = Buffer::with_data(
+            &self.gpu,
+            "matériaux",
+            bytemuck::cast_slice(table),
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        )?;
+        self.env.set_textures(textures)?;
+        // Les paramètres portent l'adresse de la table.
+        let camera = self.params.borrow().data.camera;
+        self.refresh_params(&camera)
+    }
+
+    fn addresses(&self) -> (u64, u64) {
+        (self.materials.address, self.geometry.as_ref().map(|g| g.uvs.address).unwrap_or(0))
+    }
+
+    /// Réécrit les paramètres courants (nouvelles adresses) sans changer leur contenu.
+    fn refresh_params(&self, camera: &Camera) -> Result<()> {
+        let (m, u) = self.addresses();
+        let mut ring = self.params.borrow_mut();
+        let bytes = ring.data.encode(camera, m, u);
+        let k = ring.next;
+        ring.next = (k + 1) % PARAM_SLOTS;
+        if ring.slots[k].size < bytes.len() as u64 {
+            ring.slots[k] = ParamRing::slot(&self.gpu, bytes.len())?;
+        }
+        ring.slots[k].mapped_mut().expect("paramètres non projetés")[..bytes.len()].copy_from_slice(&bytes);
+        ring.current = ring.slots[k].address;
+        Ok(())
     }
 
     /// Remplace l'environnement d'éclairage (D-33).
@@ -641,10 +745,11 @@ impl SceneRenderer {
     /// Paramètres de l'image (œil, projection, coupe, éclatement), à donner avant les tracés de chaque image.
     pub fn set_params(&self, camera: &Camera, p: &SceneParams<'_>) -> Result<()> {
         let ids: Vec<u32> = self.geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
+        let (m, u) = self.addresses();
         let mut ring = self.params.borrow_mut();
         ring.data = ParamsData::new(p, &ids);
         ring.data.camera = *camera;
-        let bytes = ring.data.encode(camera);
+        let bytes = ring.data.encode(camera, m, u);
         let k = ring.next;
         ring.next = (k + 1) % PARAM_SLOTS;
         if ring.slots[k].size < bytes.len() as u64 {
@@ -672,6 +777,7 @@ impl SceneRenderer {
             normals: Buffer::with_data(&self.gpu, "normales", bytemuck::cast_slice(&a.normals), usage)?,
             indices: Buffer::with_data(&self.gpu, "indices", bytemuck::cast_slice(&a.indices), usage)?,
             attrs: Buffer::with_data(&self.gpu, "attributs", bytemuck::cast_slice(&a.attrs), usage)?,
+            uvs: Buffer::with_data(&self.gpu, "coordonnées de texture", bytemuck::cast_slice(&a.uvs), usage)?,
             index_count: a.indices.len() as u32,
             edges: if a.edges.is_empty() {
                 None
@@ -811,9 +917,10 @@ impl SceneRenderer {
         let cx = 2.0 * (pixel[0] as f64 + 0.5) / size[0] as f64 - 1.0;
         let cy = 1.0 - 2.0 * (pixel[1] as f64 + 0.5) / size[1] as f64;
         let view_proj = camera.view_proj_region(aspect, [cx, cy], [size[0] as f64, size[1] as f64]);
+        let (m, u) = self.addresses();
         let params = {
             let mut ring = self.params.borrow_mut();
-            let bytes = ring.data.encode(camera);
+            let bytes = ring.data.encode(camera, m, u);
             if ring.pick.size < bytes.len() as u64 {
                 ring.pick = ParamRing::slot(&self.gpu, bytes.len())?;
             }
@@ -988,10 +1095,12 @@ pub fn resolve_pick(
 }
 
 /// Géométrie de la scène en tableaux plats, commune aux moteurs : sommets de toutes les pièces à la suite,
-/// attributs par sommet (couleur, rang de la pièce), indices décalés, arêtes et leur pièce.
+/// attributs par sommet (matériau, rang de la pièce), coordonnées de texture, indices décalés, arêtes et leur
+/// pièce. Un sommet partagé par des triangles de matériaux différents est dédoublé (matériau par sommet).
 pub struct GeometryArrays {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
     pub attrs: Vec<[u32; 2]>,
     /// Premier triangle et identifiant de chaque pièce.
@@ -1007,6 +1116,7 @@ impl GeometryArrays {
         let mut a = GeometryArrays {
             positions: Vec::new(),
             normals: Vec::new(),
+            uvs: Vec::new(),
             indices: Vec::new(),
             attrs: Vec::new(),
             ranges: Vec::with_capacity(meshes.len()),
@@ -1018,10 +1128,46 @@ impl GeometryArrays {
             a.edge_parts.extend(std::iter::repeat_n(k as u32, m.edges.len() / 4));
             a.ranges.push(((a.indices.len() / 3) as u32, m.id));
             let base = a.positions.len() as u32;
+            let n = m.positions.len();
             a.positions.extend_from_slice(m.positions);
             a.normals.extend_from_slice(m.normals);
-            a.attrs.extend(std::iter::repeat_n([u32::from_le_bytes(m.color), k as u32], m.positions.len()));
-            a.indices.extend(m.indices.iter().map(|i| i + base));
+            if m.uvs.len() == n {
+                a.uvs.extend_from_slice(m.uvs);
+            } else {
+                a.uvs.extend(std::iter::repeat_n([0.0; 2], n));
+            }
+            // Matériau de chaque indice, puis matériau de chaque sommet (dédoublé s'il change).
+            let mut mat_of = vec![m.material; m.indices.len()];
+            for &(first, count, mat) in &m.groups {
+                let (s, e) = (first as usize, ((first + count) as usize).min(m.indices.len()));
+                if s < e {
+                    mat_of[s..e].fill(mat);
+                }
+            }
+            let mut vmat = vec![u32::MAX; n];
+            let mut copies: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
+            a.attrs.extend(std::iter::repeat_n([0, k as u32], n));
+            for (j, &i) in m.indices.iter().enumerate() {
+                let mat = mat_of[j];
+                let vi = i as usize;
+                let out = if vi >= n {
+                    base
+                } else if vmat[vi] == u32::MAX || vmat[vi] == mat {
+                    vmat[vi] = mat;
+                    a.attrs[base as usize + vi][0] = mat;
+                    base + i
+                } else {
+                    *copies.entry((i, mat)).or_insert_with(|| {
+                        let new = a.positions.len() as u32;
+                        a.positions.push(m.positions[vi]);
+                        a.normals.push(m.normals.get(vi).copied().unwrap_or([0.0, 0.0, 1.0]));
+                        a.uvs.push(m.uvs.get(vi).copied().unwrap_or([0.0; 2]));
+                        a.attrs.push([mat, k as u32]);
+                        new
+                    })
+                };
+                a.indices.push(out);
+            }
         }
         (!a.indices.is_empty()).then_some(a)
     }
@@ -1030,7 +1176,7 @@ impl GeometryArrays {
 /// Paramètres de l'image encodés comme les lisent les nuanceurs (en-tête de 48 octets puis un décalage par
 /// pièce, dans l'ordre du tracé ; `ids` : identifiant de chaque pièce tracée).
 pub fn encode_params(camera: &Camera, p: &SceneParams<'_>, ids: &[u32]) -> Vec<u8> {
-    ParamsData::new(p, ids).encode(camera)
+    ParamsData::new(p, ids).encode(camera, 0, 0)
 }
 
 /// Sources OpenGL 4.30 des nuanceurs (moteur de secours, D-30), produites par `build.rs`.

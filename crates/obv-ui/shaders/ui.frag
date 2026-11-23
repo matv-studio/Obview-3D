@@ -57,6 +57,19 @@ void main() {
     Prim p = PRIM(v_index);
     uint kind = uint(p.params.z);
     vec2 pos = v_pos;
+    if (kind == KIND_IMAGE) {
+        // Image en couleurs rangée dans l'atlas 8 bits en quatre plans côte à côte (R, V, B en sRGB non
+        // prémultiplié, puis alpha), séparés de `params.x` en coordonnées de texture.
+        vec2 t = (pos - p.rect.xy) / max(p.rect.zw - p.rect.xy, vec2(1e-5));
+        vec2 uv = mix(p.uv.xy, p.uv.zw, t);
+        float dx = p.params.x;
+        vec3 srgb = vec3(textureLod(atlas, uv, 0.0).r, textureLod(atlas, uv + vec2(dx, 0.0), 0.0).r,
+                         textureLod(atlas, uv + vec2(2.0 * dx, 0.0), 0.0).r);
+        float a = textureLod(atlas, uv + vec2(3.0 * dx, 0.0), 0.0).r;
+        vec3 lin = mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), srgb));
+        out_color = vec4(lin * a, a) * p.color0.a;
+        return;
+    }
     if (kind == KIND_COVERAGE) {
         vec2 t = (pos - p.rect.xy) / max(p.rect.zw - p.rect.xy, vec2(1e-5));
         float a = textureLod(atlas, mix(p.uv.xy, p.uv.zw, t), 0.0).r;

@@ -20,18 +20,26 @@ pub enum Section {
     Appearance,
     Navigation,
     Display,
+    RenderViews,
     Toolbar,
     Updates,
 }
 
 impl Section {
-    const ALL: [Section; 5] =
-        [Section::Appearance, Section::Navigation, Section::Display, Section::Toolbar, Section::Updates];
+    const ALL: [Section; 6] = [
+        Section::Appearance,
+        Section::Navigation,
+        Section::Display,
+        Section::RenderViews,
+        Section::Toolbar,
+        Section::Updates,
+    ];
     fn label(self) -> &'static str {
         tr(match self {
             Section::Appearance => "Apparence",
             Section::Navigation => "Navigation",
             Section::Display => "Affichage",
+            Section::RenderViews => "Vues de rendu",
             Section::Toolbar => "Barre d'outils",
             Section::Updates => "Mises à jour",
         })
@@ -41,6 +49,7 @@ impl Section {
             Section::Appearance => "appearance",
             Section::Navigation => "mouse",
             Section::Display => "display",
+            Section::RenderViews => "render",
             Section::Toolbar => "toolbar",
             Section::Updates => "update",
         }
@@ -437,6 +446,42 @@ fn updates(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
 }
 
 /// Boutons de la barre du bas : un interrupteur par bouton, dans l'ordre de la barre (D-25).
+/// Vues de rendu (D-37) : une bascule par rendu, dans l'ordre des bandes ; la vue éclairée, à droite des bandes,
+/// reste toujours. La dernière vue affichée ne peut être retirée.
+fn render_views(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
+    let c = ui.theme.color.clone();
+    let shown = s.settings.shown_views();
+    let count = shown.iter().filter(|v| **v).count();
+    let mut rows = Vec::new();
+    for (m, on) in obv_render::RenderMode::VIEWS.into_iter().zip(shown) {
+        let (sw, ch) = controls::toggle(ui, id("vue").with(m.key()), on);
+        if let Some(v) = ch {
+            s.settings.set_view_shown(m, v);
+            s.settings_dirty = true;
+        }
+        let mut sw = sw;
+        if on && count == 1 {
+            sw = sw.opacity(0.45).tooltip(tr("Au moins une vue"));
+        }
+        rows.push(
+            Node::row()
+                .width(Size::Fill(1.0))
+                .height(Size::Px(44.0))
+                .padding(Edges::xy(14.0, 0.0))
+                .justify(Justify::SpaceBetween)
+                .child(Node::row().id(id("vue nom").with(m.key())).tooltip(crate::inspector::tooltip(m)).child(
+                    Node::text(
+                        crate::inspector::label(m),
+                        TextStyle::new(13.0, Weight::Regular),
+                        if on { c.text } else { c.text_secondary },
+                    ),
+                ))
+                .child(sw),
+        );
+    }
+    vec![section_title(ui, tr("Vues affichées")), card(ui, rows)]
+}
+
 fn toolbar(ui: &mut Ui, s: &mut AppState) -> Vec<Node> {
     let c = ui.theme.color.clone();
     let mut rows = Vec::new();
@@ -511,6 +556,7 @@ pub fn dialog(ui: &mut Ui, s: &mut AppState) {
         Section::Appearance => appearance(ui, s),
         Section::Navigation => navigation(ui, s),
         Section::Display => display(ui, s),
+        Section::RenderViews => render_views(ui, s),
         Section::Toolbar => toolbar(ui, s),
         Section::Updates => updates(ui, s),
     };

@@ -306,6 +306,8 @@ pub struct Settings {
     pub right_width: f32,
     /// Éclairage de la vue (D-33).
     pub lighting: crate::lighting::LightingSettings,
+    /// Vues de rendu affichées (clés de `RenderMode`), par défaut celles de la visionneuse Marmoset (D-37).
+    pub render_views: Vec<String>,
     /// Recherche des mises à jour au démarrage, au plus une fois par jour (D-32).
     pub check_updates: bool,
     /// Dernière recherche de mise à jour, en secondes depuis 1970.
@@ -459,13 +461,45 @@ impl Default for Settings {
             left_width: 260.0,
             right_width: 280.0,
             lighting: Default::default(),
+            render_views: DEFAULT_VIEWS.iter().map(|m| m.key().to_string()).collect(),
             check_updates: true,
             last_update_check: 0,
         }
     }
 }
 
+/// Vues de rendu de la visionneuse Marmoset, affichées par défaut (D-37).
+pub const DEFAULT_VIEWS: [obv_render::RenderMode; 5] = {
+    use obv_render::RenderMode::*;
+    [Normals, Albedo, Reflectivity, Gloss, Topology]
+};
+
 impl Settings {
+    /// Vues de rendu affichées, dans l'ordre de `RenderMode::VIEWS` ; au moins une (la première par défaut).
+    pub fn shown_views(&self) -> crate::inspector::Shown {
+        let mut out = obv_render::RenderMode::VIEWS.map(|m| self.render_views.iter().any(|k| k == m.key()));
+        if !out.iter().any(|v| *v) {
+            out[0] = true;
+        }
+        out
+    }
+
+    /// Affiche ou masque une vue de rendu ; la dernière affichée reste.
+    pub fn set_view_shown(&mut self, m: obv_render::RenderMode, shown: bool) {
+        let mut cur = self.shown_views();
+        let Some(k) = obv_render::RenderMode::VIEWS.iter().position(|x| *x == m) else { return };
+        cur[k] = shown;
+        if !cur.iter().any(|v| *v) {
+            return;
+        }
+        self.render_views = obv_render::RenderMode::VIEWS
+            .iter()
+            .zip(cur)
+            .filter(|(_, v)| *v)
+            .map(|(m, _)| m.key().to_string())
+            .collect();
+    }
+
     /// Thème effectif ; `system_dark` vient de la fenêtre.
     pub fn theme_kind(&self, system_dark: bool) -> ThemeKind {
         match self.theme {

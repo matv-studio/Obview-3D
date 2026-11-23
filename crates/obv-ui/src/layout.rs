@@ -129,6 +129,11 @@ pub enum Content {
         size: f32,
         color: Color,
     },
+    /// Image en couleurs (logo), carrée.
+    Image {
+        name: &'static str,
+        size: f32,
+    },
     /// Dessin libre dans le rectangle du nœud.
     Custom(CustomPaint),
 }
@@ -194,6 +199,11 @@ impl Node {
     pub fn icon(name: &'static str, size: f32, color: Color) -> Self {
         let mut n = Self::new().size(Size::Px(size), Size::Px(size));
         n.content = Content::Icon { name, size, color };
+        n
+    }
+    pub fn image(name: &'static str, size: f32) -> Self {
+        let mut n = Self::new().size(Size::Px(size), Size::Px(size));
+        n.content = Content::Image { name, size };
         n
     }
     pub fn custom(paint: impl Fn(&mut Painter<'_>, Rect) + 'static) -> Self {
@@ -337,7 +347,7 @@ impl Node {
                 let l = res.fonts.layout(text, *style, res.scale);
                 vec2(l.width.ceil(), l.height)
             }
-            Content::Icon { size, .. } => vec2(*size, *size),
+            Content::Icon { size, .. } | Content::Image { size, .. } => vec2(*size, *size),
             _ => Vec2::default(),
         }
     }
@@ -584,6 +594,9 @@ impl Node {
             }
             Content::Icon { name, size, color } => {
                 p.res.icons.draw(p.dl, p.res.atlas, name, inner, *size, *color);
+            }
+            Content::Image { name, size } => {
+                p.res.icons.draw_image(p.dl, p.res.atlas, name, inner, *size, 1.0);
             }
             Content::Custom(f) => f(p, inner),
         }

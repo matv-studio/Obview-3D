@@ -68,7 +68,7 @@ Mis à jour : 10/11/2026.
   environnement flouté, teinte ; Shift + glisser droit : dôme ; onglet Éclairage) ; bouton Vues (caméra) dans
   l'angle haut droit de la vue ; fichiers récents sous le nom du fichier ; bouton Panneaux (Ctrl + \) et
   compteur triangles / sommets. Version 0.3.0.
-- D-34 : logo « lentille » (cube au trait dans un anneau), icônes refaites par `tools/icones.py`.
+- D-34 puis D-36 : logo « V » (sphère creusée), icônes tirées du SVG validé par `tools/icones.py`, logo en couleurs dans la barre du haut.
 - D-35 : export en assemblage (arborescence, repères de la CAO, géométries partagées ; GLB, FBX, OBJ), pièces
   gardées au choix, flèche CAO absolue ; info-bulles de la conversion avec le choix conseillé.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.

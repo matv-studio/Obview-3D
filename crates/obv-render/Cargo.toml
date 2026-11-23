@@ -11,6 +11,8 @@ bytemuck.workspace = true
 rayon = "1"
 half = "2"
 exr = "1"
+# Textures des matériaux (couleur, métal-rugosité) : PNG, JPEG, WebP.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [build-dependencies]
 obv-build = { path = "../obv-build" }

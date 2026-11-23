@@ -7,6 +7,7 @@ pub const KIND_SHADOW: f32 = 1.0;
 pub const KIND_COVERAGE: f32 = 2.0;
 pub const KIND_LINE: f32 = 3.0;
 pub const KIND_QUAD: f32 = 4.0;
+pub const KIND_IMAGE: f32 = 5.0;
 
 /// Primitive telle que lue par `ui.vert` / `ui.frag` (8 × vec4, disposition scalaire).
 #[repr(C)]
@@ -252,6 +253,20 @@ impl DrawList {
             },
             uv,
             params: [0.0, 0.0, KIND_COVERAGE, gamma],
+        });
+    }
+
+    /// Image en couleurs (quatre plans de l'atlas séparés de `dx`), déjà en pixels de l'écran.
+    pub fn image(&mut self, device_rect: [f32; 4], uv: [f32; 4], dx: f32, opacity: f32) {
+        self.push(Prim {
+            rect: device_rect,
+            clip: self.clip(),
+            radii: [1.0, 0.0, 0.0, 1.0],
+            color0: [opacity; 4],
+            color1: [opacity; 4],
+            border: [0.0; 4],
+            uv,
+            params: [dx, 0.0, KIND_IMAGE, 1.0],
         });
     }
 

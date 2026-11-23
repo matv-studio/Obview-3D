@@ -10,6 +10,7 @@ pub mod inspector;
 pub mod lang;
 pub mod lighting;
 pub mod loading;
+pub mod materials;
 pub mod navigation;
 pub mod recent;
 pub mod settings;

@@ -15,8 +15,26 @@ fn selection_au_pixel() {
     let (fp, fnrm, fi) = quad(0.25, 0.5);
     let (bp, bn, bi) = quad(-1.0, 1.0);
     r.set_meshes(&[
-        MeshInput { positions: &bp, normals: &bn, indices: &bi, color: [255; 4], id: 3, edges: &[] },
-        MeshInput { positions: &fp, normals: &fnrm, indices: &fi, color: [255; 4], id: 7, edges: &[] },
+        MeshInput {
+            positions: &bp,
+            normals: &bn,
+            uvs: &[],
+            indices: &bi,
+            material: 0,
+            groups: Vec::new(),
+            id: 3,
+            edges: &[],
+        },
+        MeshInput {
+            positions: &fp,
+            normals: &fnrm,
+            uvs: &[],
+            indices: &fi,
+            material: 0,
+            groups: Vec::new(),
+            id: 7,
+            edges: &[],
+        },
     ])
     .unwrap();
     let cam = Camera { target: [0.0; 3], distance: 5.0, yaw: 0.0, pitch: 0.0, ..Default::default() };

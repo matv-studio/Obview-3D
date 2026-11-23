@@ -63,14 +63,15 @@ vec3 tone_map(vec3 c) {
     return mix(c, vec3(new_peak), g);
 }
 
-// Matière diélectrique satinée (plastique, peinture) : couleur de base, rugosité 0,42, F0 = 0,04.
-vec3 shade(vec3 base, vec3 n, vec3 v) {
-    const float rough = 0.42;
-    const vec3 f0 = vec3(0.04);
+// Matière métal-rugosité (glTF) : couleur de base, métal, rugosité, émission (D-37).
+vec3 shade_pbr(vec3 base_color, float metal, float rough, vec3 emissive, vec3 n, vec3 v) {
+    rough = clamp(rough, 0.03, 1.0);
+    vec3 f0 = mix(vec3(0.04), base_color, metal);
+    vec3 base = base_color * (1.0 - metal);
     float nv = max(dot(n, v), 1e-4);
     vec2 ab = env_brdf(nv, rough);
     vec3 fs = f0 * ab.x + ab.y;
-    vec3 color = base * sh_irradiance(to_env(n)) * (1.0 - fs);
+    vec3 color = base * sh_irradiance(to_env(n)) * (1.0 - fs) + emissive;
     color += env_radiance(reflect(-v, n), rough * LIGHT.light_rot.w) * fs;
     int count = int(LIGHT.light_bg.z + 0.5);
     for (int i = 0; i < 4; i++) {
@@ -92,6 +93,11 @@ vec3 shade(vec3 base, vec3 n, vec3 v) {
         color += (base * (1.0 - F) / PI + D * vis * F) * E;
     }
     return tone_map(color * LIGHT.light_tint.rgb * LIGHT.light_rot.z);
+}
+
+// Matière diélectrique satinée (plastique, peinture) : couleur de base, rugosité 0,42, F0 = 0,04.
+vec3 shade(vec3 base, vec3 n, vec3 v) {
+    return shade_pbr(base, 0.0, 0.42, vec3(0.0), n, v);
 }
 
 // Fond : environnement dans la direction `d`, flou du réglage, même exposition que la scène.
