@@ -126,8 +126,8 @@ fn main() {
         }
         return;
     }
-    let path = args.iter().find(|a| !a.starts_with("--")).map(std::path::PathBuf::from);
-    if let Err(e) = obview::app::run(path) {
+    let paths = args.iter().filter(|a| !a.starts_with("--")).map(std::path::PathBuf::from).collect();
+    if let Err(e) = obview::app::run(paths) {
         eprintln!("Obview 3D : {e}");
         std::process::exit(1);
     }

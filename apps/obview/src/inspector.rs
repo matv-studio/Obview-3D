@@ -297,8 +297,14 @@ pub fn stats(ui: &Ui, s: &AppState) -> Option<Node> {
             .child(Node::text(value, TextStyle::new(11.5, Weight::SemiBold), value_c))
             .child(Node::text(what, TextStyle::new(11.5, Weight::Regular), label_c))
     };
+    // Multivue (D-42) : sous la puce de la vue, la barre des outils occupant le bas des vues étroites.
+    let at = if crate::multiview::visible(s) {
+        Anchor { left: Some(10.0), top: Some(44.0), ..Default::default() }
+    } else {
+        Anchor { left: Some(12.0), bottom: Some(12.0), ..Default::default() }
+    };
     let mut pill = Node::row()
-        .anchor(Anchor { left: Some(12.0), bottom: Some(12.0), ..Default::default() })
+        .anchor(at)
         .height(Size::Px(28.0))
         .padding(Edges::xy(10.0, 0.0))
         .radius(6.0)

@@ -14,7 +14,6 @@ use glutin::{
 use glutin_winit::{DisplayBuilder, GlWindow};
 use obv_gl::{GlDevice, GlScene, GlTarget, GlUi};
 use obv_gpu::{FRAMES_IN_FLIGHT, Gpu, GpuDesc, PresentMode, Swapchain};
-use obv_io::Model;
 use obv_render::{Camera, MeshInput, Pick, SceneRenderer};
 use obv_ui::{Ui, gpu::UiRenderer};
 use winit::{
@@ -227,6 +226,39 @@ impl Gfx {
         }
     }
 
+    /// Crée (ou vide) les données GPU du document `doc` et le rend courant (onglets, D-41).
+    pub fn open_doc(&mut self, doc: u64) -> Result<(), String> {
+        match &mut self.inner {
+            Inner::Vulkan(v) => v.scene.open_doc(doc).map_err(|e| e.to_string()),
+            Inner::Gl(g) => match &mut g.scene {
+                Some(s) => s.open_doc(&g.dev, doc).map_err(|e| e.to_string()),
+                None => Ok(()),
+            },
+        }
+    }
+
+    /// Rend courant un document déjà ouvert ; `false` s'il n'existe pas.
+    pub fn select_doc(&self, doc: u64) -> bool {
+        match &self.inner {
+            Inner::Vulkan(v) => v.scene.select_doc(doc),
+            Inner::Gl(g) => g.scene.as_ref().is_some_and(|s| s.select_doc(doc)),
+        }
+    }
+
+    /// Libère les données GPU d'un document fermé.
+    pub fn close_doc(&mut self, doc: u64) {
+        let r = match &mut self.inner {
+            Inner::Vulkan(v) => v.scene.close_doc(doc).map_err(|e| e.to_string()),
+            Inner::Gl(g) => match &mut g.scene {
+                Some(s) => s.close_doc(&g.dev, doc).map_err(|e| e.to_string()),
+                None => Ok(()),
+            },
+        };
+        if let Err(e) = r {
+            eprintln!("Obview 3D : {e}");
+        }
+    }
+
     /// Matériaux et textures du modèle (D-37).
     pub fn set_materials(&mut self, m: &crate::materials::Prepared) -> Result<(), String> {
         match &mut self.inner {
@@ -258,25 +290,26 @@ impl Gfx {
     }
 
     /// Rend et présente une image : vue 3D puis interface.
-    pub fn present(&mut self, ui: &mut Ui, state: &AppState, scale: f32) -> Result<(), String> {
+    /// `views` : vues de l'image (multivue : une par vue) ; `current` : document actif, rechoisi après le tracé.
+    pub fn present(&mut self, ui: &mut Ui, views: &[frame::PaneView], current: u64, scale: f32) -> Result<(), String> {
         let c = &ui.theme.color;
         let bg = [c.app_bg.r, c.app_bg.g, c.app_bg.b, 1.0];
         match &mut self.inner {
             Inner::Vulkan(v) => {
                 let extent = v.swapchain.extent;
                 let (ui_r, scene) = (&mut v.ui, &v.scene);
-                let (dl, atlas, theme) = (&ui.dl, &mut ui.atlas, &ui.theme);
+                let (dl, atlas, photos, theme) = (&ui.dl, &mut ui.atlas, &mut ui.photos, &ui.theme);
                 let mut prep_err = None;
                 let ui_cell = std::cell::RefCell::new(ui_r);
                 let r = v.swapchain.present(
                     bg,
                     |cmd, slot| {
-                        if let Err(e) = ui_cell.borrow_mut().prepare(cmd, slot, dl, atlas) {
+                        if let Err(e) = ui_cell.borrow_mut().prepare(cmd, slot, dl, atlas, photos) {
                             prep_err = Some(e);
                         }
                     },
                     |cmd| {
-                        draw_viewport(&VkDraw { scene, cmd }, state, theme, scale);
+                        draw_viewport(&VkDraw { scene, cmd }, views, current, theme, scale);
                         ui_cell.borrow().draw(cmd, extent);
                     },
                 );
@@ -288,8 +321,8 @@ impl Gfx {
                     return Ok(());
                 };
                 target.begin(&g.dev, bg);
-                draw_viewport(&GlDraw { dev: &g.dev, scene, height: target.height }, state, &ui.theme, scale);
-                glui.prepare(&g.dev, &ui.dl, &mut ui.atlas);
+                draw_viewport(&GlDraw { dev: &g.dev, scene, height: target.height }, views, current, &ui.theme, scale);
+                glui.prepare(&g.dev, &ui.dl, &mut ui.atlas, &mut ui.photos);
                 glui.draw(&g.dev, target.width, target.height);
                 target.present(&g.dev).map_err(|e| e.to_string())?;
                 g.surface.swap_buffers(&g.context).map_err(|e| e.to_string())
@@ -297,21 +330,22 @@ impl Gfx {
         }
     }
 
-    /// Image de la vue seule, `width` × `height`, sans l'interface.
-    #[allow(clippy::too_many_arguments)]
+    /// Image de la vue seule du document courant, `width` × `height`, sans l'interface.
     pub fn capture(
-        &self,
-        model: &Model,
+        &mut self,
         state: &AppState,
         theme: &obv_ui::Theme,
-        materials: &crate::materials::Prepared,
         width: u32,
         height: u32,
         transparent: bool,
     ) -> Result<Vec<u8>, String> {
-        match &self.inner {
-            Inner::Vulkan(v) => frame::capture(&v.gpu, model, state, theme, materials, width, height, transparent)
-                .map_err(|e| e.to_string()),
+        match &mut self.inner {
+            Inner::Vulkan(v) => {
+                v.scene.select_format(Some(obv_gpu::RenderTarget::COLOR_FORMAT)).map_err(|e| e.to_string())?;
+                let r = frame::capture_scene(&v.gpu, &v.scene, state, theme, width, height, transparent);
+                v.scene.select_format(None).map_err(|e| e.to_string())?;
+                r.map_err(|e| e.to_string())
+            }
             Inner::Gl(g) => {
                 let scene = g.scene.as_ref().ok_or("scène absente")?;
                 frame::capture_gl(&g.dev, scene, state, theme, width, height, transparent).map_err(|e| e.to_string())

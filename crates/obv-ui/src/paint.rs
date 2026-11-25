@@ -8,6 +8,8 @@ pub const KIND_COVERAGE: f32 = 2.0;
 pub const KIND_LINE: f32 = 3.0;
 pub const KIND_QUAD: f32 = 4.0;
 pub const KIND_IMAGE: f32 = 5.0;
+/// Image du tableau des photos (`crate::photos`), coins arrondis.
+pub const KIND_PHOTO: f32 = 6.0;
 
 /// Primitive telle que lue par `ui.vert` / `ui.frag` (8 × vec4, disposition scalaire).
 #[repr(C)]
@@ -267,6 +269,33 @@ impl DrawList {
             border: [0.0; 4],
             uv,
             params: [dx, 0.0, KIND_IMAGE, 1.0],
+        });
+    }
+
+    /// Photo (couche `layer` du tableau des photos) remplissant `rect` sans déformation (rognée au centre),
+    /// coins arrondis `corners`.
+    pub fn photo(&mut self, rect: Rect, corners: impl Into<Corners>, layer: u32, opacity: f32) {
+        let c = corners.into();
+        let s = self.scale;
+        // Rognage : la photo (16:10) couvre le rectangle.
+        let photo = crate::photos::PHOTO_W as f32 / crate::photos::PHOTO_H as f32;
+        let ratio = rect.width() / rect.height().max(1e-3);
+        let uv = if ratio > photo {
+            let h = photo / ratio;
+            [0.0, (1.0 - h) * 0.5, 1.0, (1.0 + h) * 0.5]
+        } else {
+            let w = ratio / photo;
+            [(1.0 - w) * 0.5, 0.0, (1.0 + w) * 0.5, 1.0]
+        };
+        self.push(Prim {
+            rect: self.r(rect),
+            clip: self.clip(),
+            radii: [c.tl * s, c.tr * s, c.br * s, c.bl * s],
+            color0: [opacity; 4],
+            color1: [opacity; 4],
+            border: [0.0; 4],
+            uv,
+            params: [layer as f32, 0.0, KIND_PHOTO, 1.0],
         });
     }
 

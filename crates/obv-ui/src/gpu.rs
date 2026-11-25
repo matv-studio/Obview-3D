@@ -2,7 +2,11 @@
 
 use obv_gpu::{Buffer, Gpu, GraphicsPipeline, Image, MemoryLocation, PipelineDesc, Result, ShaderStages, spirv, vk};
 
-use crate::{Atlas, DrawList, paint::Prim};
+use crate::{
+    Atlas, DrawList, Photos,
+    paint::Prim,
+    photos::{PHOTO_H, PHOTO_LAYERS, PHOTO_MIPS, PHOTO_W},
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,6 +30,10 @@ pub struct UiRenderer {
     sampler: vk::Sampler,
     atlas: Image,
     atlas_ready: bool,
+    /// Photos (vignettes) : tableau de couches RGBA sRGB à niveaux de détail, échantillonneur trilinéaire.
+    photos: Image,
+    photos_ready: bool,
+    photo_sampler: vk::Sampler,
     frames: Vec<Frame>,
     current: usize,
 }
@@ -41,11 +49,13 @@ impl UiRenderer {
         frames_in_flight: usize,
     ) -> Result<Self> {
         let d = gpu.device();
-        let bindings = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+        let bindings = [0, 1].map(|b| {
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(b)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+        });
         let set_layout = unsafe {
             d.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)?
         };
@@ -63,7 +73,7 @@ impl UiRenderer {
                 set_layouts: &[set_layout],
             },
         )?;
-        let sizes = [vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: 1 }];
+        let sizes = [vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: 2 }];
         let pool = unsafe {
             d.create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(&sizes), None)?
         };
@@ -92,17 +102,51 @@ impl UiRenderer {
             vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             vk::ImageAspectFlags::COLOR,
         )?;
+        let photo_sampler = unsafe {
+            d.create_sampler(
+                &vk::SamplerCreateInfo::default()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .max_lod(PHOTO_MIPS as f32)
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                None,
+            )?
+        };
+        let photos = Image::array(
+            gpu,
+            "photos de l'interface",
+            vk::Format::R8G8B8A8_SRGB,
+            vk::Extent2D { width: PHOTO_W, height: PHOTO_H },
+            PHOTO_MIPS,
+            PHOTO_LAYERS,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::ImageAspectFlags::COLOR,
+        )?;
         let info = [vk::DescriptorImageInfo::default()
             .sampler(sampler)
             .image_view(atlas.view)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let photo_info = [vk::DescriptorImageInfo::default()
+            .sampler(photo_sampler)
+            .image_view(photos.view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
         unsafe {
             d.update_descriptor_sets(
-                &[vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&info)],
+                &[
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&photo_info),
+                ],
                 &[],
             )
         };
@@ -117,16 +161,28 @@ impl UiRenderer {
             sampler,
             atlas,
             atlas_ready: false,
+            photos,
+            photos_ready: false,
+            photo_sampler,
             frames,
             current: 0,
         })
     }
 
-    /// À appeler hors d'une passe de rendu : envoie l'atlas modifié et les primitives de l'image `slot`.
-    pub fn prepare(&mut self, cmd: vk::CommandBuffer, slot: usize, dl: &DrawList, atlas: &mut Atlas) -> Result<()> {
+    /// À appeler hors d'une passe de rendu : envoie l'atlas modifié, les photos en attente et les primitives de
+    /// l'image `slot`.
+    pub fn prepare(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        slot: usize,
+        dl: &DrawList,
+        atlas: &mut Atlas,
+        photos: &mut Photos,
+    ) -> Result<()> {
         self.current = slot % self.frames.len();
+        self.frames[self.current].staging.clear();
+        self.upload_photos(cmd, photos)?;
         let frame = &mut self.frames[self.current];
-        frame.staging.clear();
         if let Some([x0, y0, x1, y1]) = atlas.dirty.take() {
             let (w, h) = (x1 - x0, y1 - y0);
             let mut data = Vec::with_capacity((w * h) as usize);
@@ -225,6 +281,73 @@ impl UiRenderer {
         Ok(())
     }
 
+    /// Envoie les photos en attente (tous leurs niveaux) ; la première fois, met tout le tableau en lecture.
+    fn upload_photos(&mut self, cmd: vk::CommandBuffer, photos: &mut Photos) -> Result<()> {
+        if self.photos_ready && photos.pending.is_empty() {
+            return Ok(());
+        }
+        let from = if self.photos_ready {
+            (
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            )
+        } else {
+            (vk::PipelineStageFlags2::TOP_OF_PIPE, vk::AccessFlags2::NONE, vk::ImageLayout::UNDEFINED)
+        };
+        let dst =
+            (vk::PipelineStageFlags2::COPY, vk::AccessFlags2::TRANSFER_WRITE, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+        self.photos.barrier(cmd, from, dst);
+        for (id, mips) in std::mem::take(&mut photos.pending) {
+            let data: Vec<u8> = mips.iter().flatten().copied().collect();
+            let staging = Buffer::with_data(&self.gpu, "envoi d'une photo", &data, vk::BufferUsageFlags::TRANSFER_SRC)?;
+            let mut offset = 0u64;
+            let regions: Vec<vk::BufferImageCopy> = mips
+                .iter()
+                .enumerate()
+                .map(|(level, m)| {
+                    let r = vk::BufferImageCopy::default()
+                        .buffer_offset(offset)
+                        .image_subresource(
+                            vk::ImageSubresourceLayers::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .mip_level(level as u32)
+                                .base_array_layer(id.0)
+                                .layer_count(1),
+                        )
+                        .image_extent(vk::Extent3D {
+                            width: (PHOTO_W >> level).max(1),
+                            height: (PHOTO_H >> level).max(1),
+                            depth: 1,
+                        });
+                    offset += m.len() as u64;
+                    r
+                })
+                .collect();
+            unsafe {
+                self.gpu.device().cmd_copy_buffer_to_image(
+                    cmd,
+                    staging.raw,
+                    self.photos.raw,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &regions,
+                )
+            };
+            self.frames[self.current].staging.push(staging);
+        }
+        self.photos.barrier(
+            cmd,
+            dst,
+            (
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            ),
+        );
+        self.photos_ready = true;
+        Ok(())
+    }
+
     /// À appeler dans la passe de rendu de la cible de taille `extent` (pixels de l'écran).
     pub fn draw(&self, cmd: vk::CommandBuffer, extent: vk::Extent2D) {
         let frame = &self.frames[self.current];
@@ -263,6 +386,7 @@ impl Drop for UiRenderer {
         unsafe {
             let _ = d.device_wait_idle();
             d.destroy_sampler(self.sampler, None);
+            d.destroy_sampler(self.photo_sampler, None);
             d.destroy_descriptor_pool(self.pool, None);
             d.destroy_descriptor_set_layout(self.set_layout, None);
         }

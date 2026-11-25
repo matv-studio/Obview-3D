@@ -257,12 +257,9 @@ pub fn card(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
     )
 }
 
-/// Zone d'ouverture de la vue vide : cadre en pointillés, dossier en transparence ; survol et fichier glissé
-/// sur la fenêtre la mettent en avant.
-pub fn empty(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
-    if !s.parts.is_empty() || s.loading.is_some() {
-        return None;
-    }
+/// Zone d'ouverture de l'accueil sans fichier récent : cadre en pointillés, dossier en transparence ; survol et
+/// fichier glissé sur la fenêtre la mettent en avant.
+pub fn drop_zone(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
     let zid = empty_id();
     if ui.clicked(zid) {
         s.requests.push(Request::OpenFile);
@@ -280,11 +277,7 @@ pub fn empty(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
         Node::stack()
             .id(zid)
             .tooltip_shortcut(tr("Ouvrir un fichier"), "Ctrl O")
-            .anchor(Anchor {
-                center_x: true,
-                top: Some(((s.viewport.get().height() - h) * 0.5 + (1.0 - appear) * 6.0).round().max(12.0)),
-                ..Default::default()
-            })
+            .padding(Edges { top: ((1.0 - appear) * 6.0).round(), ..Default::default() })
             .size(Size::Px(w), Size::Px(h))
             .opacity(appear)
             .child(

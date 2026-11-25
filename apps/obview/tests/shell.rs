@@ -30,6 +30,10 @@ struct Shot<'a> {
     /// Instant de la capture après le dernier clic (s) : par défaut, transitions terminées ; plus court, image
     /// prise en pleine transition.
     settle: f64,
+    /// Vignettes (D-41) : celle du modèle d'essai pour chaque fichier récent et chaque onglet.
+    thumbs: bool,
+    /// Élément pris et glissé jusqu'au point donné (pixels logiques), bouton encore enfoncé à la capture.
+    drag: Option<(Id, (f32, f32))>,
 }
 
 impl Default for Shot<'_> {
@@ -46,6 +50,8 @@ impl Default for Shot<'_> {
             setup: |_| {},
             clicks: &[],
             settle: 2.5,
+            thumbs: false,
+            drag: None,
         }
     }
 }
@@ -127,6 +133,21 @@ fn capture_gl(model: &Model, file_name: &str, shot: &Shot<'_>) -> Option<Vec<u8>
     Some(f.render(&mut ui, &state))
 }
 
+/// Vignette du modèle d'essai (512 × 320, fond transparent), rendue une fois par processus.
+static THUMB: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock::new(|| {
+    let gpu = Gpu::new(&GpuDesc::default()).unwrap();
+    let model = demo::bracket();
+    let (w, h) = (obv_ui::photos::PHOTO_W, obv_ui::photos::PHOTO_H);
+    let mut s = AppState::new("", &model);
+    s.viewport.set(obv_ui::Rect::from_xywh(0.0, 0.0, w as f32, h as f32));
+    s.lighting.env = Some(environment(&s.settings.lighting.preset.clone()));
+    let (lo, hi) = model.bounds().unwrap();
+    s.camera.frame(lo, hi, w as f64 / h as f64);
+    s.camera.distance *= 0.86;
+    let theme = obv_ui::Theme::dark();
+    obview::frame::capture(&gpu, &model, &s, &theme, &obview::materials::prepare(&model), w, h, true).unwrap()
+});
+
 /// Interface et état après les clics et survols du cliché ; couleur de sélection en sRGB 8 bits.
 static THUMBS: std::sync::LazyLock<obview::lighting::Thumbs> = std::sync::LazyLock::new(obview::lighting::thumbnails);
 
@@ -150,7 +171,24 @@ fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState) {
     state.selected = shot.select;
     // Texte fixe : les références ne dépendent pas de la version de Mesa.
     state.renderer = (obview::gfx::Backend::Vulkan, "Vulkan 1.4 · llvmpipe".into());
+    // Fichier de l'essai dans un onglet (D-41) ; sans fichier ni lecture : l'accueil.
+    let tab = |state: &mut AppState, name: &str| {
+        state.tabs = vec![obview::tabs::TabInfo {
+            id: 1,
+            name: name.into(),
+            path: None,
+            loading: state.loading.as_ref().map(|l| l.overall()),
+            thumb: None,
+        }];
+        state.active_tab = 1;
+    };
+    if !file_name.is_empty() {
+        tab(&mut state, file_name);
+    }
     (shot.setup)(&mut state);
+    if let Some(l) = state.loading.clone() {
+        tab(&mut state, &l.name);
+    }
     // Éclairage (D-33) : environnement du réglage (ou `OBV_LIGHT=<clé>`), préparé une fois par processus.
     if let Ok(k) = std::env::var("OBV_LIGHT") {
         state.settings.lighting.preset = k;
@@ -163,6 +201,15 @@ fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState) {
     state.lighting.key = key;
     state.lighting.thumbs = THUMBS.clone();
     let mut ui = Ui::new(shell::theme(&state));
+    if shot.thumbs {
+        let photo = ui.photos.insert(&THUMB).unwrap();
+        for r in &state.recent {
+            state.thumbs.insert(r.path.clone(), photo);
+        }
+        for t in &mut state.tabs {
+            t.thumb = Some(photo);
+        }
+    }
     let frame = |ui: &mut Ui, state: &mut AppState, time: f64, pointer, down: bool| {
         let buttons = [down, false, false];
         ui.begin_frame(FrameInput { size: logical, scale: shot.scale, time, pointer, buttons, ..Default::default() });
@@ -176,6 +223,13 @@ fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState) {
     if let Some((lo, hi)) = model.bounds() {
         state.camera.frame(lo, hi, (v.width() / v.height()) as f64);
     }
+    // Multivue : vues cadrées comme la vue active (caméras liées).
+    let cam = state.camera;
+    if let Some(m) = &mut state.multi {
+        for p in &mut m.panes {
+            p.camera = cam;
+        }
+    }
     let mut t = 0.1;
     for id in shot.clicks {
         frame(&mut ui, &mut state, t, None, false);
@@ -184,6 +238,21 @@ fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState) {
         frame(&mut ui, &mut state, t + 0.05, p, true);
         frame(&mut ui, &mut state, t + 0.1, p, false);
         t += 0.2;
+    }
+    if let Some((id, (x, y))) = shot.drag {
+        frame(&mut ui, &mut state, t, None, false);
+        let p0 = ui.rect_of(id).map(|r| r.center());
+        assert!(p0.is_some(), "{} : élément à glisser absent", shot.name);
+        let p0 = p0.unwrap();
+        frame(&mut ui, &mut state, t + 0.05, Some(p0), true);
+        for k in 1..=8 {
+            let f = k as f32 / 8.0;
+            let p = vec2(p0.x + (x - p0.x) * f, p0.y + (y - p0.y) * f);
+            frame(&mut ui, &mut state, t + 0.05 + 0.05 * k as f64, Some(p), true);
+        }
+        frame(&mut ui, &mut state, t + 1.5, Some(vec2(x, y)), true);
+        frame(&mut ui, &mut state, t + 2.5, Some(vec2(x, y)), true);
+        return (ui, state);
     }
     if shot.settle < 0.5 {
         // Image en pleine transition : aucune image intermédiaire.
@@ -204,7 +273,9 @@ fn prepare(model: &Model, file_name: &str, shot: &Shot<'_>) -> (Ui, AppState) {
 
 fn shoot(gpu: &Gpu, model: &Model, shots: &[Shot<'_>]) {
     for shot in shots {
-        let img = capture(gpu, model, "support.step", shot);
+        // Accueil (récents) : aucun onglet de fichier.
+        let file = if shot.name.starts_with("recents") { "" } else { "support.step" };
+        let img = capture(gpu, model, file, shot);
         check_reference(shot.name, shot.size.0, shot.size.1, &img);
     }
 }
@@ -321,28 +392,42 @@ fn reglages_barre_et_affichage() {
     assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }
 
-/// Menu du bouton du document (D-33) : ouvrir, puis fichiers récents avec leur type (fichiers d'essai créés
-/// dans le dossier temporaire : le menu ne montre que les fichiers présents).
+/// Accueil (D-41) : fichiers récents en cartes (fichiers d'essai créés dans le dossier temporaire ; un fichier
+/// absent reste grisé), épinglé en tête, carte survolée avec ses boutons.
 #[test]
 fn fichiers_recents_deux_themes() {
     let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
-    let model = demo::bracket();
-    static CLICKS: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [Id::new("fichier")]);
+    let model = Model::default();
     let shot = Shot {
-        clicks: &*CLICKS,
         setup: |s| {
             let dir = std::env::temp_dir().join("obview-recents");
             std::fs::create_dir_all(&dir).unwrap();
-            s.recent = ["support.step", "Iconic.obj", "Carter moteur.glb", "Platine.stl", "Capot.igs", "Roue.fbx"]
+            let now = obview::recent::now();
+            let files: [(&str, usize, u64, bool); 6] = [
+                ("support.step", 1_240_000, 130, false),
+                ("Iconic.obj", 18_400_000, 4000, true),
+                ("Carter moteur.glb", 0, 90_000, false),
+                ("Platine.stl", 684_000, 3 * 86_400 + 100, false),
+                ("Capot.igs", 2_100_000, 5 * 86_400 + 100, false),
+                ("Roue.fbx", 312_000, 30, false),
+            ];
+            s.recent = files
                 .iter()
-                .map(|n| {
+                .map(|(n, size, age, pinned)| {
                     let p = dir.join(n);
-                    std::fs::write(&p, b"").unwrap();
-                    p
+                    // « Carter moteur.glb » n'existe pas : carte grisée.
+                    if *size > 0 {
+                        std::fs::write(&p, vec![0u8; *size]).unwrap();
+                    } else {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                    obview::recent::Recent { path: p, opened: now - age, pinned: *pinned }
                 })
                 .collect();
         },
-        hover: Some(Id::new("récents").with("ouvrir")),
+        hover: Some(obview::home::card_id(&std::env::temp_dir().join("obview-recents").join("support.step"))),
+        hover_at: (0.5, 0.3),
+        thumbs: true,
         ..Default::default()
     };
     shoot(&gpu, &model, &both(shot, "recents_sombre", "recents_clair"));
@@ -635,6 +720,7 @@ fn ouverture_deux_themes() {
     use obview::loading::{Loading, Notice};
     let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
     let empty = Model::default();
+    // Accueil sans fichier récent : zone d'ouverture survolée.
     let vide = Shot { hover: Some(obview::loading::empty_id()), ..Default::default() };
     for shot in both(vide, "vide_sombre", "vide_clair") {
         let img = capture(&gpu, &empty, "", &shot);
@@ -835,6 +921,8 @@ fn captures_fichier_local() {
 fn survol_ligne_arbre() {
     let model = demo::bracket();
     let mut state = AppState::new("support.step", &model);
+    // Fichier dans un onglet (D-41), pas l'accueil.
+    state.active_tab = 1;
     let mut ui = Ui::new(shell::theme(&state));
     let size = vec2(1920.0, 1080.0);
     let run = |ui: &mut Ui, state: &mut AppState, time: f64, pointer| {
@@ -849,4 +937,57 @@ fn survol_ligne_arbre() {
     let r = ui.rect_of(id).expect("ligne absente");
     run(&mut ui, &mut state, 0.5, Some(r.center()));
     assert!(ui.hovered(id), "la ligne n'est pas survolée");
+}
+
+/// Onglets fictifs : `support.step` (actif, id 1), puis deux autres fichiers.
+fn three_tabs(s: &mut AppState) {
+    let mut t = s.tabs[0].clone();
+    for (id, name) in [(2u64, "Carter moteur.glb"), (3, "Platine.stl")] {
+        t.id = id;
+        t.name = name.into();
+        t.path = Some(std::path::PathBuf::from(format!("/projets/essais/{name}")));
+        s.tabs.push(t.clone());
+    }
+}
+
+/// Onglets (D-41) : barre à trois onglets, aperçu au survol d'un onglet inactif (vignette, nom, dossier).
+#[test]
+fn onglets_deux_themes() {
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    let shot = Shot { setup: three_tabs, hover: Some(obview::tabs::tab_id(2)), thumbs: true, ..Default::default() };
+    shoot(&gpu, &model, &both(shot, "onglets_sombre", "onglets_clair"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
+}
+
+/// Multivue (D-42) : deux vues du même fichier (éclairée, topologie), caméras liées, onglets reliés, menu de la
+/// disposition ouvert ; puis aperçu du dépôt d'un onglet glissé sur la moitié basse de la vue de droite.
+#[test]
+fn multivue_deux_themes() {
+    use obview::multiview::{Multi, Pane, Preset};
+    let gpu = Gpu::new(&GpuDesc { validation: true, ..Default::default() }).unwrap();
+    let model = demo::bracket();
+    fn split(s: &mut AppState) {
+        three_tabs(s);
+        let cam = s.camera;
+        let topo = obview::inspector::Inspector::Single(obv_render::RenderMode::Topology);
+        s.multi = Some(Multi {
+            root: Preset::Columns.tree(&[0, 1]),
+            panes: vec![
+                Pane { id: 0, tab: 1, camera: cam, inspector: obview::inspector::Inspector::Off },
+                Pane { id: 1, tab: 1, camera: cam, inspector: topo },
+            ],
+            active: 0,
+            link_cameras: true,
+            link_selection: false,
+            next_id: 2,
+        });
+    }
+    static CLICKS: std::sync::LazyLock<[Id; 1]> = std::sync::LazyLock::new(|| [obview::multiview::layout_id()]);
+    let shot = Shot { setup: split, clicks: &*CLICKS, ..Default::default() };
+    shoot(&gpu, &model, &both(shot, "multivue_sombre", "multivue_claire"));
+    // Onglet « Carter moteur.glb » glissé sur le bas de la vue de droite.
+    let shot = Shot { setup: split, drag: Some((obview::tabs::tab_id(2), (1500.0, 900.0))), ..Default::default() };
+    shoot(&gpu, &model, &both(shot, "multivue_depot_sombre", "multivue_depot_claire"));
+    assert_eq!(gpu.validation_errors(), 0, "erreurs de validation Vulkan");
 }

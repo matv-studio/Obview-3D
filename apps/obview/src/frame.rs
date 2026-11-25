@@ -34,12 +34,43 @@ impl EdgeCache {
 }
 
 /// Fond, puis la scène dans le rendu choisi : vue normale, bandes de l'inspecteur ou rendu isolé (D-15).
-/// Tracés de la scène, quel que soit le moteur (D-30) : paramètres de l'image, fond et surfaces par bande.
+/// Tracés de la scène, quel que soit le moteur (D-30) : document, paramètres de l'image, fond et surfaces.
 pub trait SceneDraw {
+    /// Document des tracés suivants (onglets, D-41) ; `false` : inconnu du moteur.
+    fn select_doc(&self, doc: u64) -> bool;
     fn set_params(&self, camera: &Camera, params: &SceneParams<'_>);
     /// `rect` : pixels de la cible, origine en haut à gauche.
     fn background(&self, rect: [f32; 4], top: [f32; 4], bottom: [f32; 4], band: Band);
     fn scene(&self, rect: [f32; 4], camera: &Camera, mode: RenderMode, band: Band);
+}
+
+/// Ce qu'il faut pour tracer une vue : document, rectangle (pixels logiques), caméra et paramètres de l'image,
+/// limites des bandes de rendu (multivue, D-42 : une par vue).
+pub struct PaneView {
+    pub doc: u64,
+    pub rect: obv_ui::Rect,
+    pub camera: Camera,
+    pub offsets: Vec<[f32; 3]>,
+    pub section: Option<[f32; 4]>,
+    pub light: obv_render::light::LightBlock,
+    pub selected: Option<u32>,
+    pub cuts: [f32; inspector::CUTS],
+}
+
+impl PaneView {
+    /// Vue du document courant de `state`, dans `rect` ; `animated` : limites des bandes en cours de transition.
+    pub fn of(state: &AppState, rect: obv_ui::Rect, animated: bool) -> Self {
+        PaneView {
+            doc: state.active_tab,
+            rect,
+            camera: state.camera,
+            offsets: tools::explode_offsets(state),
+            section: tools::section_plane(state),
+            light: crate::lighting::block(state),
+            selected: state.selected.map(|i| i as u32),
+            cuts: if animated { state.inspector_cuts } else { inspector::targets(state) },
+        }
+    }
 }
 
 /// Vulkan : tracés enregistrés dans `cmd`.
@@ -49,6 +80,9 @@ pub struct VkDraw<'a> {
 }
 
 impl SceneDraw for VkDraw<'_> {
+    fn select_doc(&self, doc: u64) -> bool {
+        self.scene.select_doc(doc)
+    }
     fn set_params(&self, camera: &Camera, params: &SceneParams<'_>) {
         if let Err(e) = self.scene.set_params(camera, params) {
             eprintln!("Obview 3D : paramètres de l'image : {e}");
@@ -70,6 +104,9 @@ pub struct GlDraw<'a> {
 }
 
 impl SceneDraw for GlDraw<'_> {
+    fn select_doc(&self, doc: u64) -> bool {
+        self.scene.select_doc(doc)
+    }
     fn set_params(&self, camera: &Camera, params: &SceneParams<'_>) {
         self.scene.set_params(self.dev, camera, params);
     }
@@ -81,8 +118,45 @@ impl SceneDraw for GlDraw<'_> {
     }
 }
 
-pub fn draw_viewport(scene: &dyn SceneDraw, state: &AppState, theme: &Theme, scale: f32) {
-    draw_view(scene, state, theme, state.viewport.get(), scale, Target::Screen);
+/// Vue du document courant de `state` dans `rect`, avec la caméra et le rendu d'une autre vue (multivue).
+pub fn pane_view(state: &AppState, rect: obv_ui::Rect, camera: Camera, inspector: Inspector) -> PaneView {
+    PaneView {
+        camera,
+        cuts: inspector::target_cuts(inspector, &state.settings.shown_views()),
+        ..PaneView::of(state, rect, false)
+    }
+}
+
+/// Vues de l'image que `state` suffit à décrire : la vue active et, en multivue, les autres vues du même
+/// document (les vues d'autres documents demandent leurs états rangés : `app::App`).
+pub fn local_views(state: &AppState) -> Vec<PaneView> {
+    let Some(m) = state.multi.as_ref().filter(|_| crate::multiview::visible(state)) else {
+        return vec![PaneView::of(state, state.viewport.get(), true)];
+    };
+    let (panes, _) = m.layout(state.multi_area.get());
+    panes
+        .into_iter()
+        .filter_map(|(id, r)| {
+            let p = m.pane(id)?;
+            if id == m.active {
+                Some(PaneView::of(state, r, true))
+            } else if p.tab == state.active_tab {
+                Some(pane_view(state, r, p.camera, p.inspector))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Trace les vues de l'image (une, ou plusieurs en multivue), puis revient au document actif `current`.
+pub fn draw_viewport(scene: &dyn SceneDraw, views: &[PaneView], current: u64, theme: &Theme, scale: f32) {
+    for v in views {
+        if scene.select_doc(v.doc) {
+            draw_pane(scene, v, theme, scale, Target::Screen);
+        }
+    }
+    scene.select_doc(current);
 }
 
 /// Destination d'une image de la vue.
@@ -94,34 +168,35 @@ pub enum Target {
     Capture { transparent: bool },
 }
 
-/// Comme [`draw_viewport`] pour une vue `v` (pixels logiques) quelconque.
+/// Vue du document courant de `state` dans `v` (pixels logiques) : captures, essais.
 pub fn draw_view(scene: &dyn SceneDraw, state: &AppState, theme: &Theme, v: obv_ui::Rect, scale: f32, target: Target) {
-    let animated = target == Target::Screen;
+    draw_pane(scene, &PaneView::of(state, v, target == Target::Screen), theme, scale, target);
+}
+
+/// Trace une vue : paramètres, puis fond et scène de chaque bande (rendu normal ou rendus de l'inspecteur).
+pub fn draw_pane(scene: &dyn SceneDraw, pv: &PaneView, theme: &Theme, scale: f32, target: Target) {
     let transparent = target == Target::Capture { transparent: true };
+    let v = pv.rect;
     let rect = [v.min.x * scale, v.min.y * scale, v.max.x * scale, v.max.y * scale];
     let c = &theme.color;
-    let cam = &state.camera;
-    let offsets = tools::explode_offsets(state);
     let params = SceneParams {
-        section: tools::section_plane(state),
-        offsets: &offsets,
-        light: crate::lighting::block(state),
-        selected: state.selected.map(|i| i as u32),
+        section: pv.section,
+        offsets: &pv.offsets,
+        light: pv.light,
+        selected: pv.selected,
         accent: to_srgb8(crate::shell::selection_color(theme)),
     };
-    scene.set_params(cam, &params);
-    // Vue normale et bandes des rendus selon les limites animées (au repos : l'état exact de l'inspecteur).
-    let cuts = if animated { state.inspector_cuts } else { inspector::targets(state) };
+    scene.set_params(&pv.camera, &params);
     let top = [c.viewport_top.r, c.viewport_top.g, c.viewport_top.b, 1.0];
     let bottom = [c.viewport_bottom.r, c.viewport_bottom.g, c.viewport_bottom.b, 1.0];
     let gray = inspector::background(theme.kind == ThemeKind::Dark);
-    for (m, band) in inspector::device_regions(v, &cuts, scale) {
+    for (m, band) in inspector::device_regions(v, &pv.cuts, scale) {
         // Alpha du haut : 1 autorise le fond d'environnement (vue normale), 0 le refuse (bandes des rendus).
         let (t, b) = if m.is_some() { ([gray[0], gray[1], gray[2], 0.0], gray) } else { (top, bottom) };
         if !transparent {
             scene.background(rect, t, b, band);
         }
-        scene.scene(rect, cam, m.unwrap_or(RenderMode::Lit), band);
+        scene.scene(rect, &pv.camera, m.unwrap_or(RenderMode::Lit), band);
     }
 }
 
@@ -138,9 +213,6 @@ pub fn capture(
     height: u32,
     transparent: bool,
 ) -> Result<Vec<u8>> {
-    let ss = if width.max(height) * 2 <= 8192 { 2 } else { 1 };
-    let (w, h) = (width * ss, height * ss);
-    let target = RenderTarget::new(gpu, w, h)?;
     let mut scene = SceneRenderer::new(gpu, RenderTarget::COLOR_FORMAT, RenderTarget::DEPTH_FORMAT)?;
     if let Some(env) = &state.lighting.env {
         scene.set_environment(env)?;
@@ -148,12 +220,29 @@ pub fn capture(
     let edges = (state.inspector != Inspector::Off).then(|| EdgeCache::compute(model));
     scene.set_materials(&materials.table, &materials.textures)?;
     scene.set_meshes(&mesh_inputs(model, state, edges.as_ref()))?;
+    capture_scene(gpu, &scene, state, theme, width, height, transparent)
+}
+
+/// Image de la vue par une scène déjà chargée (son document courant), dont les pipelines du format
+/// `RenderTarget::COLOR_FORMAT` sont choisis (`SceneRenderer::select_format`). Rendue au double puis réduite.
+pub fn capture_scene(
+    gpu: &Gpu,
+    scene: &SceneRenderer,
+    state: &AppState,
+    theme: &Theme,
+    width: u32,
+    height: u32,
+    transparent: bool,
+) -> Result<Vec<u8>> {
+    let ss = if width.max(height) * 2 <= 8192 { 2 } else { 1 };
+    let (w, h) = (width * ss, height * ss);
+    let target = RenderTarget::new(gpu, w, h)?;
     let v = state.viewport.get();
     let scale = w as f32 / v.width().max(1.0);
     let view = obv_ui::Rect::from_xywh(0.0, 0.0, v.width(), v.height());
     let clear = if transparent { [0.0; 4] } else { [0.0, 0.0, 0.0, 1.0] };
     target.render(clear, |cmd| {
-        draw_view(&VkDraw { scene: &scene, cmd }, state, theme, view, scale, Target::Capture { transparent })
+        draw_view(&VkDraw { scene, cmd }, state, theme, view, scale, Target::Capture { transparent })
     })?;
     let rgba = target.read_rgba8();
     Ok(if ss == 1 { rgba } else { downsample(&rgba, w, h, ss) })
@@ -308,12 +397,18 @@ impl OffscreenFrame {
         let dl = &ui.dl;
         let theme = &ui.theme;
         let atlas = RefCell::new(&mut ui.atlas);
+        let photos = RefCell::new(&mut ui.photos);
         let mut prepare_result = Ok(());
         self.target.render_with(
             bg,
-            |cmd| prepare_result = renderer.borrow_mut().prepare(cmd, 0, dl, &mut atlas.borrow_mut()),
             |cmd| {
-                draw_viewport(&VkDraw { scene, cmd }, state, theme, scale);
+                prepare_result =
+                    renderer.borrow_mut().prepare(cmd, 0, dl, &mut atlas.borrow_mut(), &mut photos.borrow_mut())
+            },
+            |cmd| {
+                for v in local_views(state) {
+                    draw_pane(&VkDraw { scene, cmd }, &v, theme, scale, Target::Screen);
+                }
                 renderer.borrow().draw(cmd, extent);
             },
         )?;
@@ -368,8 +463,10 @@ impl GlOffscreenFrame {
             (self.target.as_ref().unwrap(), self.scene.as_ref().unwrap(), self.ui.as_mut().unwrap());
         let c = &ui.theme.color;
         target.begin(dev, [c.app_bg.r, c.app_bg.g, c.app_bg.b, 1.0]);
-        draw_viewport(&GlDraw { dev, scene, height: target.height }, state, &ui.theme, ui.dl.scale);
-        glui.prepare(dev, &ui.dl, &mut ui.atlas);
+        for v in local_views(state) {
+            draw_pane(&GlDraw { dev, scene, height: target.height }, &v, &ui.theme, ui.dl.scale, Target::Screen);
+        }
+        glui.prepare(dev, &ui.dl, &mut ui.atlas, &mut ui.photos);
         glui.draw(dev, target.width, target.height);
         target.read_rgba8(dev)
     }

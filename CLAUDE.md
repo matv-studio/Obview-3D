@@ -103,7 +103,8 @@ Dépôt
   crédits `CREDITS.md`), envoi au GPU `env_gpu.rs` (Vulkan) et `obv-gl/src/scene.rs`, nuanceurs `light.glsl`,
   `light_block.glsl` ; onglet `apps/obview/src/lighting.rs`. Captures : `OBV_LIGHT=<clé>` (studio, studio-photo,
   studio-warm, interior, outdoor, sunset, hard, rim, neon, warm-cool), `OBV_LIGHT_BG=1` (fond environnement).
-- Fichiers récents : `apps/obview/src/recent.rs`.
+- Fichiers récents : `apps/obview/src/recent.rs` ; accueil `home.rs`, onglets `tabs.rs` (D-41), vignettes
+  `thumbs.rs`, multivue `multiview.rs` (D-42) ; images RGBA de l'interface : `crates/obv-ui/src/photos.rs`.
 - Mises à jour : `apps/obview/src/update.rs` (essai réseau : `cargo test -p obview --lib recherche_reelle --
   --ignored`).
 - `.github/workflows/` : `ci.yml` (Linux lavapipe et llvmpipe, Windows, macOS 26 arm64),
@@ -129,6 +130,11 @@ Dépôt
   Sous lavapipe, une image d'un gros modèle prend plusieurs centaines de ms : les transitions y semblent
   sautées et des clics rapprochés tombent dans la même image (les essais de capture prennent les transitions
   à mi-course par le champ `settle`).
+- Onglets (D-41) : un champ d'`AppState` propre au fichier se déclare dans `doc_fields!` (`tabs.rs`), sinon il
+  reste commun à tous les onglets. Pour agir sur un onglet en arrière-plan : `App::peek` (installe son état et
+  son document GPU le temps d'une fonction). Les demandes `tab_requests` / `multi_requests` sont traitées au
+  début de l'image suivante : l'image qui les pousse doit en demander une autre (fait en fin de `redraw`).
+  Essais de capture : un fichier dans `prepare` donne un onglet actif (id 1) ; sans fichier, l'accueil.
 - Icônes : `crates/obv-ui/assets/icons/*.svg` (grille 16, `stroke-width="1.5"` remplacé au rendu) ; ajouter le
   nom dans `crates/obv-ui/src/icon_list.rs`. Geist n'a ni U+202F ni U+2009 (espace synthétique dans `text.rs`).
 - Captures : `cargo test -p obview --test shell` (références dans `apps/obview/tests/reference`,

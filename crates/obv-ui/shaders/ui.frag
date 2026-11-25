@@ -7,8 +7,11 @@ layout(location = 1) in vec2 v_pos;
 layout(location = 0) out vec4 out_color;
 #ifdef OBV_GL
 layout(binding = 0) uniform sampler2D atlas;
+layout(binding = 1) uniform sampler2DArray photos;
 #else
 layout(set = 0, binding = 0) uniform sampler2D atlas;
+// Photos (vignettes) : couches RGBA sRGB à niveaux de détail, lues en lumière linéaire.
+layout(set = 0, binding = 1) uniform sampler2DArray photos;
 #endif
 
 // Distance signée à une boîte arrondie (rayons : haut-gauche, haut-droite, bas-droite, bas-gauche ; y vers le bas).
@@ -68,6 +71,18 @@ void main() {
         float a = textureLod(atlas, uv + vec2(3.0 * dx, 0.0), 0.0).r;
         vec3 lin = mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), srgb));
         out_color = vec4(lin * a, a) * p.color0.a;
+        return;
+    }
+    if (kind == KIND_PHOTO) {
+        vec2 t = (pos - p.rect.xy) / max(p.rect.zw - p.rect.xy, vec2(1e-5));
+        // Niveau de détail d'après le rapport texels / pixels (pas de dérivées dans une branche par primitive).
+        float texels = 512.0 * (p.uv.z - p.uv.x);
+        float lod = max(log2(texels / max(p.rect.z - p.rect.x, 1.0)), 0.0);
+        vec4 c = textureLod(photos, vec3(mix(p.uv.xy, p.uv.zw, t), p.params.x), lod);
+        vec2 mid = (p.rect.xy + p.rect.zw) * 0.5;
+        float d = sd_round_box(pos - mid, (p.rect.zw - p.rect.xy) * 0.5, p.radii);
+        float cover = clamp(0.5 - d, 0.0, 1.0);
+        out_color = vec4(c.rgb * c.a, c.a) * cover * p.color0.a;
         return;
     }
     if (kind == KIND_COVERAGE) {

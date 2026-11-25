@@ -134,6 +134,8 @@ pub enum Content {
         name: &'static str,
         size: f32,
     },
+    /// Photo du tableau des photos (vignette d'un fichier), aux coins du nœud.
+    Photo(crate::photos::PhotoId),
     /// Dessin libre dans le rectangle du nœud.
     Custom(CustomPaint),
 }
@@ -204,6 +206,11 @@ impl Node {
     pub fn image(name: &'static str, size: f32) -> Self {
         let mut n = Self::new().size(Size::Px(size), Size::Px(size));
         n.content = Content::Image { name, size };
+        n
+    }
+    pub fn photo(id: crate::photos::PhotoId) -> Self {
+        let mut n = Self::new();
+        n.content = Content::Photo(id);
         n
     }
     pub fn custom(paint: impl Fn(&mut Painter<'_>, Rect) + 'static) -> Self {
@@ -598,6 +605,7 @@ impl Node {
             Content::Image { name, size } => {
                 p.res.icons.draw_image(p.dl, p.res.atlas, name, inner, *size, 1.0);
             }
+            Content::Photo(id) => p.dl.photo(inner, s.radius, id.0, 1.0),
             Content::Custom(f) => f(p, inner),
         }
         for c in &self.children {

@@ -2,7 +2,10 @@
 //! stockage, atlas 8 bits).
 
 use glow::HasContext;
-use obv_ui::{Atlas, DrawList, gl_src};
+use obv_ui::{
+    Atlas, DrawList, Photos, gl_src,
+    photos::{PHOTO_H, PHOTO_LAYERS, PHOTO_MIPS, PHOTO_W},
+};
 
 use crate::{GlDevice, GlError, Result, blend, depth, program, upload};
 
@@ -13,6 +16,8 @@ pub struct GlUi {
     atlas: glow::Texture,
     atlas_size: u32,
     atlas_ready: bool,
+    /// Photos (vignettes) : tableau de couches sRGB à niveaux de détail, unité de texture 1.
+    photos: glow::Texture,
     count: i32,
     vao: glow::VertexArray,
 }
@@ -34,7 +39,28 @@ impl GlUi {
                 gl.tex_parameter_i32(glow::TEXTURE_2D, k, v as i32);
             }
             gl.bind_texture(glow::TEXTURE_2D, None);
+            let photos = gl.create_texture().map_err(GlError::Other)?;
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(photos));
+            gl.tex_storage_3d(
+                glow::TEXTURE_2D_ARRAY,
+                PHOTO_MIPS as i32,
+                glow::SRGB8_ALPHA8,
+                PHOTO_W as i32,
+                PHOTO_H as i32,
+                PHOTO_LAYERS as i32,
+            );
+            for (k, v) in [
+                (glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR),
+                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+                (glow::TEXTURE_MAX_LEVEL, PHOTO_MIPS - 1),
+            ] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, k, v as i32);
+            }
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
             Ok(GlUi {
+                photos,
                 program,
                 prims: gl.create_buffer().map_err(GlError::Other)?,
                 push: gl.create_buffer().map_err(GlError::Other)?,
@@ -47,9 +73,33 @@ impl GlUi {
         }
     }
 
-    /// Envoie les primitives de l'image et la partie modifiée de l'atlas.
-    pub fn prepare(&mut self, dev: &GlDevice, dl: &DrawList, atlas: &mut Atlas) {
+    /// Envoie les primitives de l'image, la partie modifiée de l'atlas et les photos en attente.
+    pub fn prepare(&mut self, dev: &GlDevice, dl: &DrawList, atlas: &mut Atlas, photos: &mut Photos) {
         let gl = &dev.gl;
+        if !photos.pending.is_empty() {
+            unsafe {
+                gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.photos));
+                gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+                for (id, mips) in std::mem::take(&mut photos.pending) {
+                    for (level, m) in mips.iter().enumerate() {
+                        gl.tex_sub_image_3d(
+                            glow::TEXTURE_2D_ARRAY,
+                            level as i32,
+                            0,
+                            0,
+                            id.0 as i32,
+                            (PHOTO_W >> level).max(1) as i32,
+                            (PHOTO_H >> level).max(1) as i32,
+                            1,
+                            glow::RGBA,
+                            glow::UNSIGNED_BYTE,
+                            glow::PixelUnpackData::Slice(Some(m)),
+                        );
+                    }
+                }
+                gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+            }
+        }
         let dirty = atlas.dirty.take();
         let region = if self.atlas_ready { dirty } else { Some([0, 0, atlas.size, atlas.size]) };
         if let Some([x0, y0, x1, y1]) = region
@@ -101,9 +151,13 @@ impl GlUi {
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 0, Some(self.prims));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.atlas));
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.photos));
             gl.use_program(Some(self.program));
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays_instanced(glow::TRIANGLES, 0, 6, self.count);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+            gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
     }
@@ -115,6 +169,7 @@ impl GlUi {
             gl.delete_buffer(self.prims);
             gl.delete_buffer(self.push);
             gl.delete_texture(self.atlas);
+            gl.delete_texture(self.photos);
             gl.delete_vertex_array(self.vao);
         }
     }

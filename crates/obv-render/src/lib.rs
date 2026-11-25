@@ -347,7 +347,7 @@ pub struct SceneParams<'a> {
 }
 
 /// Anneau de tampons de paramètres : une image en cours d'exécution n'est jamais réécrite.
-const PARAM_SLOTS: usize = 4;
+const PARAM_SLOTS: usize = 24;
 
 /// Géométrie d'entrée du moteur de rendu.
 pub struct MeshInput<'a> {
@@ -541,26 +541,58 @@ pub fn background_inverse(camera: &Camera, aspect: f64) -> [f32; 16] {
 
 pub struct SceneRenderer {
     gpu: Gpu,
-    pipeline: GraphicsPipeline,
-    background: GraphicsPipeline,
-    xray: GraphicsPipeline,
-    edges: GraphicsPipeline,
+    /// Pipelines de tracé par format de cible : celui de la fenêtre en premier, puis ceux demandés par
+    /// [`SceneRenderer::select_format`] (images hors écran, vignettes) ; `active` : ceux des tracés suivants.
+    sets: Vec<(vk::Format, Pipelines)>,
+    active: std::cell::Cell<usize>,
+    depth_format: vk::Format,
     pick_pipeline: GraphicsPipeline,
-    section: GraphicsPipeline,
     pick_target: PickTarget,
-    geometry: Option<Geometry>,
+    /// Géométrie et matériaux de chaque document ouvert (D-41) ; `current` : celui des tracés et de la sélection.
+    docs: std::collections::HashMap<u64, DocGpu>,
+    current: std::cell::Cell<u64>,
     params: std::cell::RefCell<ParamRing>,
     env: env_gpu::EnvBinding,
+}
+
+/// Données d'un document sur le GPU.
+struct DocGpu {
+    geometry: Option<Geometry>,
     /// Table des matériaux (D-37).
     materials: Buffer,
 }
 
-const PICK_FORMAT: vk::Format = vk::Format::R32G32_UINT;
+impl DocGpu {
+    fn new(gpu: &Gpu) -> Result<Self> {
+        Ok(DocGpu {
+            geometry: None,
+            materials: Buffer::with_data(
+                gpu,
+                "matériaux",
+                bytemuck::bytes_of(&materials::GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff])),
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+            )?,
+        })
+    }
+}
 
-impl SceneRenderer {
-    pub fn new(gpu: &Gpu, color_format: vk::Format, depth_format: vk::Format) -> Result<Self> {
-        let env = env_gpu::EnvBinding::new(gpu)?;
-        let env_layouts = [env.layout];
+/// Pipelines de tracé de la scène pour un format de couleur.
+struct Pipelines {
+    pipeline: GraphicsPipeline,
+    background: GraphicsPipeline,
+    xray: GraphicsPipeline,
+    edges: GraphicsPipeline,
+    section: GraphicsPipeline,
+}
+
+impl Pipelines {
+    fn new(
+        gpu: &Gpu,
+        color_format: vk::Format,
+        depth_format: vk::Format,
+        env_layout: vk::DescriptorSetLayout,
+    ) -> Result<Self> {
+        let env_layouts = [env_layout];
         let pipeline = GraphicsPipeline::new(
             gpu,
             &PipelineDesc {
@@ -626,6 +658,17 @@ impl SceneRenderer {
                 ..Default::default()
             },
         )?;
+        Ok(Pipelines { pipeline, background, xray, edges, section })
+    }
+}
+
+const PICK_FORMAT: vk::Format = vk::Format::R32G32_UINT;
+
+impl SceneRenderer {
+    pub fn new(gpu: &Gpu, color_format: vk::Format, depth_format: vk::Format) -> Result<Self> {
+        let mut env = env_gpu::EnvBinding::new(gpu)?;
+        env.ensure(0)?;
+        let main = Pipelines::new(gpu, color_format, depth_format, env.layout)?;
         let pick_pipeline = GraphicsPipeline::new(
             gpu,
             &PipelineDesc {
@@ -665,23 +708,73 @@ impl SceneRenderer {
         };
         Ok(SceneRenderer {
             gpu: gpu.clone(),
-            pipeline,
-            background,
-            xray,
-            edges,
+            sets: vec![(color_format, main)],
+            active: std::cell::Cell::new(0),
+            depth_format,
             pick_pipeline,
-            section,
             pick_target,
-            geometry: None,
+            docs: std::collections::HashMap::from([(0, DocGpu::new(gpu)?)]),
+            current: std::cell::Cell::new(0),
             params: std::cell::RefCell::new(ParamRing::new(gpu, 1)?),
             env,
-            materials: Buffer::with_data(
-                gpu,
-                "matériaux",
-                bytemuck::bytes_of(&materials::GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff])),
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-            )?,
         })
+    }
+
+    fn doc(&self) -> &DocGpu {
+        &self.docs[&self.current.get()]
+    }
+
+    fn pipes(&self) -> &Pipelines {
+        &self.sets[self.active.get()].1
+    }
+
+    /// Choisit les pipelines des tracés suivants pour une cible de format `color` (créés à la première
+    /// demande) ; `None` : ceux de la fenêtre.
+    pub fn select_format(&mut self, color: Option<vk::Format>) -> Result<()> {
+        let Some(f) = color else {
+            self.active.set(0);
+            return Ok(());
+        };
+        if let Some(i) = self.sets.iter().position(|(g, _)| *g == f) {
+            self.active.set(i);
+            return Ok(());
+        }
+        let p = Pipelines::new(&self.gpu, f, self.depth_format, self.env.layout)?;
+        self.sets.push((f, p));
+        self.active.set(self.sets.len() - 1);
+        Ok(())
+    }
+
+    /// Document des envois, tracés et sélections qui suivent (D-41) ; créé vide s'il n'existe pas encore.
+    pub fn open_doc(&mut self, doc: u64) -> Result<()> {
+        if !self.docs.contains_key(&doc) {
+            self.env.ensure(doc)?;
+            self.docs.insert(doc, DocGpu::new(&self.gpu)?);
+        }
+        self.current.set(doc);
+        Ok(())
+    }
+
+    /// Choisit un document déjà ouvert pour les tracés suivants (`false` : inconnu, rien ne change).
+    pub fn select_doc(&self, doc: u64) -> bool {
+        let known = self.docs.contains_key(&doc);
+        if known {
+            self.current.set(doc);
+        }
+        known
+    }
+
+    /// Libère la géométrie, les matériaux et les textures du document `doc` (l'appareil est attendu).
+    pub fn close_doc(&mut self, doc: u64) -> Result<()> {
+        unsafe { self.gpu.device().device_wait_idle()? };
+        self.docs.remove(&doc);
+        self.env.remove(doc)?;
+        if self.docs.is_empty() {
+            self.open_doc(0)?;
+        } else if !self.docs.contains_key(&self.current.get()) {
+            self.current.set(*self.docs.keys().next().expect("document"));
+        }
+        Ok(())
     }
 
     /// Remplace la table des matériaux et le tableau de leurs textures (D-37) ; l'appareil est attendu.
@@ -693,20 +786,25 @@ impl SceneRenderer {
         let fallback = [materials::GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff])];
         let table = if table.is_empty() { &fallback[..] } else { table };
         unsafe { self.gpu.device().device_wait_idle()? };
-        self.materials = Buffer::with_data(
+        let buffer = Buffer::with_data(
             &self.gpu,
             "matériaux",
             bytemuck::cast_slice(table),
             vk::BufferUsageFlags::STORAGE_BUFFER,
         )?;
-        self.env.set_textures(textures)?;
+        let doc = self.current.get();
+        if let Some(d) = self.docs.get_mut(&doc) {
+            d.materials = buffer;
+        }
+        self.env.set_textures(doc, textures)?;
         // Les paramètres portent l'adresse de la table.
         let camera = self.params.borrow().data.camera;
         self.refresh_params(&camera)
     }
 
     fn addresses(&self) -> (u64, u64) {
-        (self.materials.address, self.geometry.as_ref().map(|g| g.uvs.address).unwrap_or(0))
+        let d = self.doc();
+        (d.materials.address, d.geometry.as_ref().map(|g| g.uvs.address).unwrap_or(0))
     }
 
     /// Réécrit les paramètres courants (nouvelles adresses) sans changer leur contenu.
@@ -736,7 +834,7 @@ impl SceneRenderer {
                 vk::PipelineBindPoint::GRAPHICS,
                 p.layout,
                 0,
-                &[self.env.set],
+                &[self.env.set_of(self.current.get()).expect("jeu de descripteurs du document")],
                 &[],
             )
         };
@@ -744,7 +842,8 @@ impl SceneRenderer {
 
     /// Paramètres de l'image (œil, projection, coupe, éclatement), à donner avant les tracés de chaque image.
     pub fn set_params(&self, camera: &Camera, p: &SceneParams<'_>) -> Result<()> {
-        let ids: Vec<u32> = self.geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
+        let ids: Vec<u32> =
+            self.doc().geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
         let (m, u) = self.addresses();
         let mut ring = self.params.borrow_mut();
         ring.data = ParamsData::new(p, &ids);
@@ -767,12 +866,15 @@ impl SceneRenderer {
     /// Remplace la géométrie affichée (tout est réuni dans un tampon par attribut). Les paramètres de l'image
     /// sont remis à zéro (sans coupe ni décalage) jusqu'au prochain [`Self::set_params`].
     pub fn set_meshes(&mut self, meshes: &[MeshInput<'_>]) -> Result<()> {
+        let doc = self.current.get();
         let Some(a) = GeometryArrays::new(meshes) else {
-            self.geometry = None;
+            if let Some(d) = self.docs.get_mut(&doc) {
+                d.geometry = None;
+            }
             return Ok(());
         };
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
-        self.geometry = Some(Geometry {
+        let geometry = Some(Geometry {
             positions: Buffer::with_data(&self.gpu, "positions", bytemuck::cast_slice(&a.positions), usage)?,
             normals: Buffer::with_data(&self.gpu, "normales", bytemuck::cast_slice(&a.normals), usage)?,
             indices: Buffer::with_data(&self.gpu, "indices", bytemuck::cast_slice(&a.indices), usage)?,
@@ -790,6 +892,9 @@ impl SceneRenderer {
             edge_count: (a.edges.len() / 4) as u32,
             ranges: a.ranges,
         });
+        if let Some(d) = self.docs.get_mut(&doc) {
+            d.geometry = geometry;
+        }
         self.set_params(&Camera::default(), &SceneParams::default())
     }
 
@@ -833,9 +938,10 @@ impl SceneRenderer {
     ) {
         let Some((w, h)) = self.set_rect(cmd, rect) else { return };
         let camera = self.params.borrow().data.camera;
-        self.background.bind(cmd);
-        self.bind_env(cmd, &self.background);
-        self.background.push(
+        let bg = &self.pipes().background;
+        bg.bind(cmd);
+        self.bind_env(cmd, bg);
+        bg.push(
             cmd,
             &BackgroundPush {
                 top,
@@ -851,7 +957,7 @@ impl SceneRenderer {
     /// Géométrie dans `rect` avec le rendu `mode`, limitée à la bande `band`.
     pub fn draw_scene(&self, cmd: vk::CommandBuffer, rect: [f32; 4], camera: &Camera, mode: RenderMode, band: Band) {
         let Some((w, h)) = self.set_rect(cmd, rect) else { return };
-        let Some(g) = &self.geometry else { return };
+        let Some(g) = &self.doc().geometry else { return };
         let d = self.gpu.device();
         let view_proj = camera.view_proj((w / h) as f64);
         let params = self.current_params();
@@ -868,9 +974,9 @@ impl SceneRenderer {
             band: band.raw(),
         };
         let p = match mode {
-            RenderMode::XRay => &self.xray,
-            _ if sectioned => &self.section,
-            _ => &self.pipeline,
+            RenderMode::XRay => &self.pipes().xray,
+            _ if sectioned => &self.pipes().section,
+            _ => &self.pipes().pipeline,
         };
         p.bind(cmd);
         if mode != RenderMode::XRay {
@@ -881,8 +987,8 @@ impl SceneRenderer {
         if mode == RenderMode::Edges
             && let Some((e, parts)) = &g.edges
         {
-            self.edges.bind(cmd);
-            self.edges.push(
+            self.pipes().edges.bind(cmd);
+            self.pipes().edges.push(
                 cmd,
                 &EdgePush {
                     view_proj,
@@ -909,7 +1015,7 @@ impl SceneRenderer {
     /// Sélection au pixel : rend la scène dans une cible d'un pixel centrée sur `pixel` (pixels de l'écran,
     /// relatifs au coin haut gauche de la vue de taille `size`), puis relit le triangle et la profondeur.
     pub fn pick(&self, camera: &Camera, size: [f32; 2], pixel: [f32; 2]) -> Result<Option<Pick>> {
-        let Some(g) = &self.geometry else { return Ok(None) };
+        let Some(g) = &self.doc().geometry else { return Ok(None) };
         if size[0] < 1.0 || size[1] < 1.0 {
             return Ok(None);
         }

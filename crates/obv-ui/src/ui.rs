@@ -136,6 +136,8 @@ pub struct Ui {
     pub fonts: Fonts,
     pub icons: Icons,
     pub atlas: Atlas,
+    /// Photos en couleurs (vignettes) : couches attribuées et envois en attente.
+    pub photos: crate::Photos,
     pub dl: DrawList,
     pub input: FrameInput,
     prev_buttons: [bool; 3],
@@ -145,6 +147,9 @@ pub struct Ui {
     active: Option<Id>,
     clicked: Option<Id>,
     double_clicked: Option<Id>,
+    /// Appui du bouton du milieu : élément survolé ; relâché sur le même élément, il donne `middle_clicked`.
+    middle_press: Option<Id>,
+    middle_clicked: Option<Id>,
     last_click: Option<(Id, f64)>,
     press_pos: Option<Vec2>,
     hover_since: f64,
@@ -187,6 +192,7 @@ impl Ui {
             fonts: Fonts::new(),
             icons: Icons::new(),
             atlas: Atlas::new(2048),
+            photos: crate::Photos::default(),
             dl: DrawList::new(1.0),
             input: FrameInput { scale: 1.0, ..Default::default() },
             prev_buttons: [false; 3],
@@ -196,6 +202,8 @@ impl Ui {
             active: None,
             clicked: None,
             double_clicked: None,
+            middle_press: None,
+            middle_clicked: None,
             last_click: None,
             press_pos: None,
             hover_since: 0.0,
@@ -235,6 +243,8 @@ impl Ui {
         let pressed = input.buttons[0] && !self.prev_buttons[0];
         let released = !input.buttons[0] && self.prev_buttons[0];
         let any_pressed = (0..3).any(|i| input.buttons[i] && !self.prev_buttons[i]);
+        let (middle_down, middle_up) =
+            (input.buttons[1] && !self.prev_buttons[1], !input.buttons[1] && self.prev_buttons[1]);
         self.prev_buttons = input.buttons;
         self.prev_pointer = self.input.pointer;
         let min_layer = self.modal_layer.unwrap_or(0);
@@ -247,6 +257,12 @@ impl Ui {
         self.hovered = hovered;
         self.clicked = None;
         self.double_clicked = None;
+        self.middle_clicked = None;
+        if middle_down {
+            self.middle_press = hovered;
+        } else if middle_up {
+            self.middle_clicked = self.middle_press.take().filter(|id| Some(*id) == hovered);
+        }
         self.animating = false;
 
         // Un clic hors du menu ouvert le ferme (et le clic sur son bouton ne le rouvre pas).
@@ -344,6 +360,10 @@ impl Ui {
     pub fn hovered(&self, id: Id) -> bool {
         self.hovered == Some(id) && (self.active.is_none() || self.active == Some(id))
     }
+    /// Secondes depuis que l'élément survolé l'est (aperçus différés, comme les info-bulles).
+    pub fn hover_duration(&self) -> f64 {
+        self.input.time - self.hover_since
+    }
     pub fn hovered_raw(&self) -> Option<Id> {
         self.hovered
     }
@@ -367,6 +387,10 @@ impl Ui {
     }
     pub fn clicked(&self, id: Id) -> bool {
         self.clicked == Some(id)
+    }
+    /// Clic du bouton du milieu sur `id` (fermeture d'un onglet).
+    pub fn middle_clicked(&self, id: Id) -> bool {
+        self.middle_clicked == Some(id)
     }
     pub fn double_clicked(&self, id: Id) -> bool {
         self.double_clicked == Some(id)

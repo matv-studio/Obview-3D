@@ -75,7 +75,7 @@ pub struct AppState {
     /// Onglet du panneau droit : 0 propriétés, 1 éclairage.
     pub right_tab: usize,
     /// Fichiers récemment ouverts, le plus récent en tête (D-33).
-    pub recent: Vec<std::path::PathBuf>,
+    pub recent: Vec<crate::recent::Recent>,
     /// Version affichée dans les réglages (celle de la construction ; fixée par les essais de capture).
     pub app_version: &'static str,
     pub update_request: Option<crate::update::Action>,
@@ -116,6 +116,20 @@ pub struct AppState {
     pub views: views::ViewsState,
     /// Caméra demandée par l'interface (vues standard ou enregistrées), animée par la fenêtre.
     pub camera_request: Option<Camera>,
+    /// Onglets ouverts (D-41), l'actif (`tabs::HOME` : accueil), demandes de la barre, glisser en cours.
+    pub tabs: Vec<crate::tabs::TabInfo>,
+    pub active_tab: u64,
+    pub tab_requests: Vec<crate::tabs::TabRequest>,
+    pub tab_drag: Option<crate::tabs::TabDrag>,
+    /// Accueil : recherche dans les récents, vignettes des fichiers (couches des photos de l'interface).
+    pub home_search: String,
+    /// Multivue (D-42), ses demandes, zone des vues à la dernière mise en page, dépôt visé par un onglet glissé
+    /// (vue — aucune : vue unique —, zone, rectangle de l'aperçu).
+    pub multi: Option<crate::multiview::Multi>,
+    pub multi_requests: Vec<crate::multiview::MultiRequest>,
+    pub multi_area: Rc<Cell<Rect>>,
+    pub tab_drop: Option<((Option<u64>, crate::multiview::Zone), Rect)>,
+    pub thumbs: std::collections::HashMap<std::path::PathBuf, obv_ui::PhotoId>,
 }
 
 impl AppState {
@@ -190,6 +204,16 @@ impl AppState {
             capture: tools::CaptureState::default(),
             views: views::ViewsState::default(),
             camera_request: None,
+            tabs: Vec::new(),
+            active_tab: crate::tabs::HOME,
+            tab_requests: Vec::new(),
+            tab_drag: None,
+            home_search: String::new(),
+            multi: None,
+            multi_requests: Vec::new(),
+            multi_area: Rc::new(Cell::new(Rect::ZERO)),
+            tab_drop: None,
+            thumbs: Default::default(),
         }
     }
 
@@ -380,7 +404,7 @@ fn views_button(ui: &mut Ui) -> Node {
     let c = ui.theme.color.clone();
     let open = ui.popup_open(id);
     let color = if open { c.text } else { c.icon };
-    let mut b = widgets::small_icon_button(ui, id, "camera", tr("Vues"), color).size(Size::Px(28.0), Size::Px(28.0));
+    let mut b = widgets::small_icon_button(ui, id, "views", tr("Vues"), color).size(Size::Px(28.0), Size::Px(28.0));
     if open {
         b = b.bg(c.surface_active);
     }
@@ -434,36 +458,14 @@ fn topbar(ui: &mut Ui, s: &AppState) -> Node {
     let theme_id = Id::new("thème");
     // Logo (D-36) : version claire sur le thème sombre, version sombre sur le thème clair.
     let logo = Node::image(if ui.theme.kind == ThemeKind::Dark { "obview-clair" } else { "obview-sombre" }, 24.0);
-    let file = Node::row()
-        .id(Id::new("fichier"))
-        .tooltip(tr("Fichiers récents"))
-        .gap(6.0)
-        .padding(Edges::xy(8.0, 0.0))
-        .height(Size::Px(28.0))
-        .radius(6.0)
-        .bg(ui.state_color(Id::new("fichier"), Color::TRANSPARENT, c.raised_hover, c.raised_hover))
-        .child(match &s.loading {
-            Some(_) => spinner(ui, 15.0, c.accent),
-            None => Node::icon("file", 15.0, c.text_secondary),
-        })
-        .child(Node::text(
-            s.loading.as_ref().map(|l| l.name.as_str()).unwrap_or(&s.file_name),
-            TextStyle::new(m.font_size, Weight::Medium),
-            c.text,
-        ))
-        .child(Node::icon("chevron-down", 13.0, c.text_tertiary));
-    // Sans document ouvert (ni lecture en cours), la vue vide porte l'ouverture : pas de nom à montrer.
-    let has_doc = !s.parts.is_empty() || s.loading.is_some();
-    let left = Node::row()
-        .gap(10.0)
-        .child(logo)
-        .child(Node::text("Obview", TextStyle::new(m.font_size, Weight::SemiBold), c.text))
-        .children(has_doc.then(|| Node::new().size(Size::Px(1.0), Size::Px(18.0)).bg(c.border)))
-        .children(has_doc.then_some(file));
     let dark = s.theme_kind() == ThemeKind::Dark;
     let theme_icon = if dark { "sun" } else { "moon" };
     let theme_tip = tr(if dark { "Thème clair" } else { "Thème sombre" });
     let pill = update_pill(ui, s);
+    // Onglets (D-41) : tout l'espace entre le logo et les commandes de droite.
+    let right_w = 28.0 * 2.0 + 6.0 * 3.0 + 4.0 + 110.0 + if pill.is_some() { 150.0 } else { 0.0 };
+    let avail = ui.input.size.x - 24.0 - 24.0 - 10.0 - right_w - 24.0;
+    let left = Node::row().gap(10.0).child(logo).child(crate::tabs::bar(ui, s, avail));
     let right = Node::row()
         .gap(6.0)
         .children(pill.map(|p| [p, Node::new().size(Size::Px(4.0), Size::Px(1.0))]).into_iter().flatten())
@@ -719,7 +721,13 @@ fn toolbar(ui: &mut Ui, s: &mut AppState) -> Option<Node> {
         };
         items.push(widgets::icon_button(ui, tool_button_id(b), b.icon(), b.label(), b.shortcut(), active));
     }
+    // Multivue (D-42) : disposition et liaisons, seulement quand plusieurs vues sont ouvertes.
+    if let Some(b) = crate::multiview::layout_button(ui, s) {
+        items.push(widgets::toolbar_separator(ui));
+        items.push(b);
+    }
     tools::capture_popup(ui, s, None);
+    crate::multiview::layout_popup(ui, s);
     (!items.is_empty()).then(|| widgets::docked_toolbar(ui, items))
 }
 
@@ -773,8 +781,32 @@ pub fn grip_id(side: u8) -> Id {
 }
 
 fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
+    // Multivue (D-42) : la zone des vues est partagée ; le contenu habituel de la vue va dans la vue active, dont
+    // le rectangle devient celui de la vue (navigation, sélection, outils).
+    if crate::multiview::visible(s) {
+        let (area_cell, rect_cell) = (s.multi_area.clone(), s.viewport.clone());
+        let m = s.multi.clone().expect("multivue");
+        let content = view_content(ui, s, None);
+        let mut root = Node::stack().fill().child(
+            Node::custom(move |_, r| {
+                area_cell.set(r);
+                rect_cell.set(m.rect_of(r, m.active).unwrap_or(r));
+            })
+            .fill(),
+        );
+        for n in crate::multiview::overlay(ui, s, content) {
+            root.push(n);
+        }
+        return root;
+    }
     let rect_cell = s.viewport.clone();
-    let mut root = Node::stack().fill().child(Node::custom(move |_, r| rect_cell.set(r)).fill());
+    view_content(ui, s, Some(Node::custom(move |_, r| rect_cell.set(r)).fill()))
+}
+
+/// Contenu de la vue (rendus, outils, lecture, avis, gizmo, menu des vues) ; `setter` : nœud qui relève le
+/// rectangle de la vue.
+fn view_content(ui: &mut Ui, s: &mut AppState, setter: Option<Node>) -> Node {
+    let mut root = Node::stack().fill().children(setter);
     if let Some(layer) = inspector::overlay(ui, s) {
         root.push(layer);
     }
@@ -786,9 +818,6 @@ fn viewport(ui: &mut Ui, s: &mut AppState) -> Node {
     }
     if let Some(p) = tools::tool_panel(ui, s) {
         root.push(p);
-    }
-    if let Some(z) = crate::loading::empty(ui, s) {
-        root.push(z);
     }
     if let Some(card) = crate::loading::card(ui, s) {
         root.push(card);
@@ -852,8 +881,21 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
         };
         Node::stack().width(Size::Px(w)).height(Size::Fill(1.0)).clip().child(panel.anchor(a))
     };
+    // Accueil (D-41) : la page des récents remplace la vue et les panneaux.
+    let home = s.active_tab == crate::tabs::HOME;
+    let (lw, rw) = if home { (0.0, 0.0) } else { (lw, rw) };
     let left = (lw >= 1.0).then(|| parts_panel(ui, s)).map(|p| slide(p, lw, true));
-    let view = viewport(ui, s);
+    let view = if home {
+        let page = crate::home::page(ui, s);
+        let rect_cell = s.viewport.clone();
+        Node::stack()
+            .fill()
+            .child(Node::custom(move |_, r| rect_cell.set(r)).fill())
+            .child(page)
+            .children(crate::loading::notice(ui, s))
+    } else {
+        viewport(ui, s)
+    };
     let right = (rw >= 1.0).then(|| properties_panel(ui, s)).map(|p| slide(p, rw, false));
     let body = Node::row()
         .width(Size::Fill(1.0))
@@ -874,17 +916,32 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     .fill();
     // Au-dessus du contour : barre du bas en onglet (centrée sur la vue) et poignées des panneaux.
     let spacer = |w: f32| Node::new().width(Size::Px(w)).height(Size::Fill(1.0));
+    // Multivue : la barre des outils se centre sous la vue active (ses outils agissent sur elle).
+    let (lw_bar, rw_bar) = match s.multi.as_ref().filter(|_| crate::multiview::visible(s)) {
+        Some(mv) => {
+            let (st, area) = (s.stage.get(), s.multi_area.get());
+            mv.rect_of(area, mv.active)
+                .map(|r| ((r.min.x - st.min.x).max(0.0), (st.max.x - r.max.x).max(0.0)))
+                .unwrap_or((lw, rw))
+        }
+        None => (lw, rw),
+    };
     let lane = Node::row()
         .fill()
         .align(Align::Stretch)
-        .children((lw >= 1.0).then(|| spacer(lw)))
-        .child(Node::stack().fill().children(toolbar(ui, s)))
-        .children((rw >= 1.0).then(|| spacer(rw)));
+        .children((lw_bar >= 1.0).then(|| spacer(lw_bar)))
+        .child(Node::stack().fill().children((!home).then(|| toolbar(ui, s)).flatten()))
+        .children((rw_bar >= 1.0).then(|| spacer(rw_bar)));
     let overlay = Node::stack()
         .fill()
         .child(lane)
         .children((!s.parts.is_empty()).then(|| [grip(ui, 0, lw), grip(ui, 1, rw)]).into_iter().flatten());
-    let stage = Node::stack().fill().child(body).child(frame).child(overlay);
+    // Multivue : contours de chaque vue, aperçu du dépôt d'un onglet glissé.
+    let panes = if home { None } else { crate::multiview::frames(s, &ui.theme, radius) };
+    let drop = crate::multiview::drop_preview(ui, s);
+    let chrome = if home { Vec::new() } else { crate::multiview::chrome(ui, s) };
+    let stage =
+        Node::stack().fill().child(body).child(frame).children(panes).children(chrome).children(drop).child(overlay);
     let column = Node::column().fill().child(topbar(ui, s)).child(
         Node::stack().fill().padding(Edges { left: margin, right: margin, top: 0.0, bottom: margin }).child(stage),
     );
@@ -892,7 +949,6 @@ pub fn build(ui: &mut Ui, s: &mut AppState) -> Node {
     let root = Node::stack().fill().child(column).children(crate::loading::top_line(ui, s));
     views_popup(ui, s);
     update_popup(ui, s);
-    crate::recent::popup(ui, s);
     settings_ui::dialog(ui, s);
     convert_ui::dialog(ui, s);
     root
@@ -985,7 +1041,12 @@ pub fn handle(ui: &mut Ui, s: &mut AppState) {
             s.convert.status = convert_ui::Status::Idle;
         }
     }
-    // Bouton du document : menu des récents (crate::recent) ; Ctrl O ouvre directement le dialogue.
+    crate::tabs::handle(ui, s);
+    crate::multiview::handle(ui, s);
+    if s.active_tab == crate::tabs::HOME {
+        crate::home::handle(ui, s);
+    }
+    // Ctrl O (comme Ctrl T) : choisir un fichier, ouvert dans un nouvel onglet (D-41).
     if ui.input.modifiers.ctrl && ui.input.keys.contains(&Key::Char('o')) {
         s.requests.push(Request::OpenFile);
     }

@@ -32,6 +32,26 @@ pub fn part_name(name: &str) -> Cow<'_, str> {
 pub const EN: &[(&str, &str)] = &[
     // Barre du haut
     ("Ouvrir un fichier", "Open a file"),
+    // Onglets et accueil (D-41)
+    ("Accueil", "Home"),
+    ("Fermer l'onglet", "Close tab"),
+    ("Ouvrir…", "Open…"),
+    ("Épingler", "Pin"),
+    ("Désépingler", "Unpin"),
+    ("Retirer de la liste", "Remove from list"),
+    // Multivue (D-42)
+    ("Onglets en multivue", "Tabs in split view"),
+    ("Onglet montré", "Shown tab"),
+    ("Fermer la vue", "Close view"),
+    ("Vue unique", "Single view"),
+    ("Deux colonnes", "Two columns"),
+    ("Deux rangées", "Two rows"),
+    ("Une et deux", "One and two"),
+    ("Quatre vues", "Four views"),
+    ("Disposition", "Layout"),
+    ("Caméras liées", "Linked cameras"),
+    ("Lier les caméras", "Link cameras"),
+    ("Sélection liée", "Linked selection"),
     ("Thème clair", "Light theme"),
     ("Thème sombre", "Dark theme"),
     ("Réglages", "Settings"),

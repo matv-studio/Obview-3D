@@ -72,7 +72,9 @@ struct PickTarget {
 
 pub struct GlScene {
     programs: Programs,
-    geometry: Option<Geometry>,
+    /// Géométrie, matériaux et textures de chaque document ouvert (D-41) ; `current` : celui des tracés.
+    docs: std::collections::HashMap<u64, GlDoc>,
+    current: std::cell::Cell<u64>,
     params: glow::Buffer,
     push: glow::Buffer,
     pick_target: PickTarget,
@@ -83,9 +85,50 @@ pub struct GlScene {
     camera: RefCell<Camera>,
     /// Pyramide d'environnement (D-33), unité de texture 1.
     env: glow::Texture,
-    /// Table des matériaux (liaison 5) et tableau de leurs textures (unité 2), D-37.
+}
+
+/// Données d'un document : géométrie, table des matériaux (liaison 5) et tableau de leurs textures (unité 2).
+struct GlDoc {
+    geometry: Option<Geometry>,
     materials: glow::Buffer,
     textures: glow::Texture,
+}
+
+impl GlDoc {
+    unsafe fn new(gl: &glow::Context) -> Result<Self> {
+        unsafe {
+            let d = GlDoc {
+                geometry: None,
+                materials: gl.create_buffer().map_err(GlError::Other)?,
+                textures: texture_array(gl, &TextureArray::empty())?,
+            };
+            let satin = GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff]);
+            upload(gl, d.materials, glow::SHADER_STORAGE_BUFFER, bytemuck::bytes_of(&satin), glow::STATIC_DRAW);
+            Ok(d)
+        }
+    }
+
+    fn free_geometry(&mut self, gl: &glow::Context) {
+        if let Some(g) = self.geometry.take() {
+            unsafe {
+                for b in [g.positions, g.normals, g.indices, g.attrs, g.uvs] {
+                    gl.delete_buffer(b);
+                }
+                if let Some((e, p)) = g.edges {
+                    gl.delete_buffer(e);
+                    gl.delete_buffer(p);
+                }
+            }
+        }
+    }
+
+    fn destroy(mut self, gl: &glow::Context) {
+        self.free_geometry(gl);
+        unsafe {
+            gl.delete_texture(self.textures);
+            gl.delete_buffer(self.materials);
+        }
+    }
 }
 
 /// Tableau de textures RGBA 8 bits à niveaux, répété (convention glTF).
@@ -204,7 +247,8 @@ impl GlScene {
             }
             let s = GlScene {
                 programs,
-                geometry: None,
+                docs: std::collections::HashMap::from([(0, GlDoc::new(gl)?)]),
+                current: std::cell::Cell::new(0),
                 params,
                 push,
                 pick_target,
@@ -212,26 +256,61 @@ impl GlScene {
                 section: RefCell::new(None),
                 camera: RefCell::new(Camera::default()),
                 env: env_texture(gl, &[(1, 1, vec![0, 0, 0, 0x3c00])])?,
-                materials: gl.create_buffer().map_err(GlError::Other)?,
-                textures: texture_array(gl, &TextureArray::empty())?,
             };
             upload(gl, s.params, glow::SHADER_STORAGE_BUFFER, &[0; 64], glow::DYNAMIC_DRAW);
-            let satin = GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff]);
-            upload(gl, s.materials, glow::SHADER_STORAGE_BUFFER, bytemuck::bytes_of(&satin), glow::STATIC_DRAW);
             Ok(s)
         }
     }
 
+    fn doc(&self) -> &GlDoc {
+        &self.docs[&self.current.get()]
+    }
+
+    fn doc_mut(&mut self) -> &mut GlDoc {
+        self.docs.get_mut(&self.current.get()).expect("document courant")
+    }
+
+    /// Document des envois, tracés et sélections qui suivent (D-41) ; créé vide s'il n'existe pas encore.
+    pub fn open_doc(&mut self, dev: &GlDevice, doc: u64) -> Result<()> {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.docs.entry(doc) {
+            e.insert(unsafe { GlDoc::new(&dev.gl)? });
+        }
+        self.current.set(doc);
+        Ok(())
+    }
+
+    /// Choisit un document déjà ouvert pour les tracés suivants (`false` : inconnu).
+    pub fn select_doc(&self, doc: u64) -> bool {
+        let known = self.docs.contains_key(&doc);
+        if known {
+            self.current.set(doc);
+        }
+        known
+    }
+
+    /// Libère la géométrie, les matériaux et les textures du document `doc`.
+    pub fn close_doc(&mut self, dev: &GlDevice, doc: u64) -> Result<()> {
+        if let Some(d) = self.docs.remove(&doc) {
+            d.destroy(&dev.gl);
+        }
+        if self.docs.is_empty() {
+            self.open_doc(dev, 0)?;
+        } else if !self.docs.contains_key(&self.current.get()) {
+            self.current.set(*self.docs.keys().next().expect("document"));
+        }
+        Ok(())
+    }
+
     pub fn set_meshes(&mut self, dev: &GlDevice, meshes: &[MeshInput<'_>]) -> Result<()> {
         let gl = &dev.gl;
-        self.free_geometry(gl);
+        self.doc_mut().free_geometry(gl);
         let Some(a) = GeometryArrays::new(meshes) else { return Ok(()) };
         let buf = |bytes: &[u8]| -> Result<glow::Buffer> {
             let b = unsafe { gl.create_buffer() }.map_err(GlError::Other)?;
             upload(gl, b, glow::SHADER_STORAGE_BUFFER, bytes, glow::STATIC_DRAW);
             Ok(b)
         };
-        self.geometry = Some(Geometry {
+        let geometry = Some(Geometry {
             positions: buf(bytemuck::cast_slice(&a.positions))?,
             normals: buf(bytemuck::cast_slice(&a.normals))?,
             indices: buf(bytemuck::cast_slice(&a.indices))?,
@@ -246,26 +325,14 @@ impl GlScene {
             edge_count: (a.edges.len() / 4) as i32,
             ranges: a.ranges,
         });
+        self.doc_mut().geometry = geometry;
         Ok(())
-    }
-
-    fn free_geometry(&mut self, gl: &glow::Context) {
-        if let Some(g) = self.geometry.take() {
-            unsafe {
-                for b in [g.positions, g.normals, g.indices, g.attrs, g.uvs] {
-                    gl.delete_buffer(b);
-                }
-                if let Some((e, p)) = g.edges {
-                    gl.delete_buffer(e);
-                    gl.delete_buffer(p);
-                }
-            }
-        }
     }
 
     /// Paramètres de l'image (œil, coupe, éclatement) pour les tracés suivants.
     pub fn set_params(&self, dev: &GlDevice, camera: &Camera, p: &SceneParams<'_>) {
-        let ids: Vec<u32> = self.geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
+        let ids: Vec<u32> =
+            self.doc().geometry.as_ref().map(|g| g.ranges.iter().map(|r| r.1).collect()).unwrap_or_default();
         upload(&dev.gl, self.params, glow::SHADER_STORAGE_BUFFER, &encode_params(camera, p, &ids), glow::DYNAMIC_DRAW);
         *self.section.borrow_mut() = p.section;
         *self.camera.borrow_mut() = *camera;
@@ -285,10 +352,12 @@ impl GlScene {
         let gl = &dev.gl;
         let fallback = [GpuMaterial::satin([0xc9, 0xcc, 0xd1, 0xff])];
         let table = if table.is_empty() { &fallback[..] } else { table };
-        upload(gl, self.materials, glow::SHADER_STORAGE_BUFFER, bytemuck::cast_slice(table), glow::STATIC_DRAW);
+        let materials = self.doc().materials;
+        upload(gl, materials, glow::SHADER_STORAGE_BUFFER, bytemuck::cast_slice(table), glow::STATIC_DRAW);
         let t = unsafe { texture_array(gl, textures)? };
-        unsafe { gl.delete_texture(self.textures) };
-        self.textures = t;
+        let d = self.doc_mut();
+        unsafe { gl.delete_texture(d.textures) };
+        d.textures = t;
         Ok(())
     }
 
@@ -299,7 +368,7 @@ impl GlScene {
             gl.active_texture(glow::TEXTURE1);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.env));
             gl.active_texture(glow::TEXTURE2);
-            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.textures));
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.doc().textures));
             gl.active_texture(glow::TEXTURE0);
         }
     }
@@ -317,7 +386,7 @@ impl GlScene {
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(g.indices));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 3, Some(g.attrs));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(self.params));
-            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 5, Some(self.materials));
+            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 5, Some(self.doc().materials));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 6, Some(g.uvs));
         }
     }
@@ -360,7 +429,7 @@ impl GlScene {
     ) {
         let gl = &dev.gl;
         let Some((w, h)) = set_rect(gl, rect, height) else { return };
-        let Some(g) = &self.geometry else { return };
+        let Some(g) = &self.doc().geometry else { return };
         let view_proj = camera.view_proj((w / h) as f64);
         let sectioned = self.section.borrow().is_some();
         let (p, xray) = match mode {
@@ -410,7 +479,7 @@ impl GlScene {
     /// une projection resserrée sur ce pixel, comme sous Vulkan. Les paramètres de l'image doivent être à jour.
     pub fn pick(&self, dev: &GlDevice, camera: &Camera, size: [f32; 2], pixel: [f32; 2]) -> Option<Pick> {
         let gl = &dev.gl;
-        let g = self.geometry.as_ref()?;
+        let g = self.doc().geometry.as_ref()?;
         if size[0] < 1.0 || size[1] < 1.0 {
             return None;
         }
@@ -466,9 +535,11 @@ impl GlScene {
         resolve_pick(camera, size, pixel, read, &g.ranges, *self.section.borrow())
     }
 
-    pub fn destroy(mut self, dev: &GlDevice) {
+    pub fn destroy(self, dev: &GlDevice) {
         let gl = &dev.gl;
-        self.free_geometry(gl);
+        for (_, d) in self.docs {
+            d.destroy(gl);
+        }
         unsafe {
             let p = &self.programs;
             for prog in [p.scene, p.section, p.xray, p.edges, p.pick, p.background] {
@@ -481,8 +552,6 @@ impl GlScene {
             gl.delete_texture(self.pick_target.ids);
             gl.delete_texture(self.pick_target.depth);
             gl.delete_texture(self.env);
-            gl.delete_texture(self.textures);
-            gl.delete_buffer(self.materials);
         }
     }
 }

@@ -1,6 +1,6 @@
 # État d'Obview 3D
 
-Mis à jour : 23/11/2026.
+Mis à jour : 25/11/2026.
 
 ## Fait
 - Décisions D-01 à D-32 (`DECISIONS.md`), architecture cible (`ARCHITECTURE.md`).
@@ -81,9 +81,20 @@ Mis à jour : 23/11/2026.
   gardées sur 285, conversion complète en 28 s). Captures `conversion_pieces_*`.
 - D-39 : mises à jour alignées sur Revel (bouton « Version x.y.z », confirmation avant installation, préversions
   au choix, recherche automatique toutes les six heures) ; version 0.3.1.
+- D-40 : vues de rendu comme Marmoset (clic sur la vue éclairée : bandes fermées ; clic dans le vide d'un rendu
+  isolé : bandes rouvertes).
+- D-41 : onglets (état et données GPU par fichier, file de lectures, Ctrl T / W / Tab / 1-9 / Maj T, clic milieu,
+  glisser), accueil des récents en cartes (épingler, retirer, fichier absent, recherche), vignettes rendues à
+  l'ouverture et gardées en cache, aperçu au survol des onglets ; couche d'images RGBA d'`obv-ui`.
+- D-42 : multivue (onglet glissé dans la vue avec accroche et contour, quatre vues au plus, séparateurs,
+  dispositions, caméras liées par L, sélection liée, onglets reliés dans la barre).
+- D-43 : icônes revues (14).
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
+00. Onglets et multivue (D-41, D-42) vérifiés sous Xvfb (Vulkan et OpenGL) et par les captures `onglets_*`,
+   `recents_*`, `multivue_*`, `multivue_depot_*` ; à essayer par l'utilisateur sur une vraie machine, puis
+   nouvelle version.
 0. Brouillon de version v0.3.1 (installateurs Windows, macOS, Linux) préparé par `version.yml` : à essayer et
    publier par l'utilisateur, comme version normale (pas préversion) pour que les copies 0.3.0 la voient ; v0.3.0 est publiée (préversion) ; v0.2.1 est publiée (archives .zip, sans recherche de mises à jour : passage à 0.3.0 à la main) ; le brouillon v0.1.0 est dépassé. Archives 0.2.0 : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
    en CI (`macos-26`), le chargeur livré trouve le pilote KosmicKrisp, qui ne voit aucun GPU utilisable dans

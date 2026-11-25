@@ -610,3 +610,83 @@ alignée plutôt que dupliquée.
   donc invisibles pour l'ancien code ; une copie 0.3.0 ne verra 0.3.1 que si celle-ci est publiée comme version
   normale.
 - Numéro 0.3.1 : une v0.3.0 était déjà publiée le 10/11.
+
+## D-40 · Vues de rendu : clic sur la vue éclairée, retour aux bandes d'un clic dans le vide (25/11/2026)
+
+Demande : comme la visionneuse Marmoset.
+
+- Bandes ouvertes : un clic sur une bande isole ce rendu (D-37) ; un clic sur la vue éclairée, tout à droite,
+  ferme les bandes et revient au rendu normal (avant : sans effet).
+- Rendu isolé autre que l'éclairé : un clic dans la vue hors du modèle rouvre les bandes, pour passer vite d'un
+  rendu à l'autre ; un clic sur une pièce la sélectionne comme avant. Le clic qui rouvre ne compte pas pour un
+  double-clic.
+
+## D-41 · Onglets, page d'accueil, vignettes (25/11/2026)
+
+Demande : plusieurs modèles sans relancer l'application, liste des fichiers récents au lancement ; maquettes
+validées le 25/11 (aperçu au survol d'un onglet : oui ; « Comparer » après conversion, réouverture de la séance,
+superposition de deux versions : non).
+
+- Barre du haut : logo, onglet d'accueil (maison), onglets des fichiers, « + » (Ctrl T, comme Ctrl O). Un onglet
+  s'active au clic ; se ferme par sa croix (visible sur l'actif et au survol), le clic milieu ou Ctrl W ; se
+  déplace en le glissant dans la barre. Ctrl Tab / Ctrl Maj Tab (accueil compris), Ctrl 1 à 8, Ctrl 9 (le
+  dernier), Ctrl Maj T (rouvre le dernier fermé). Les chiffres sont lus par leur position (claviers AZERTY).
+  Largeur selon le nom (84 à 220 px), réduite également quand la place manque.
+- Un fichier déjà ouvert active son onglet ; modifié depuis sa lecture (date du fichier), il y est relu. Plusieurs
+  fichiers en ligne de commande ou déposés ensemble : un onglet chacun.
+- Une lecture à la fois (OpenCASCADE et la mémoire) : les autres attendent, l'onglet montre l'avancement (anneau,
+  sinon roue). Un échec ferme l'onglet encore vide ; un fichier relu garde son modèle précédent.
+- État par document : pièces, sélection, outils, caméra, vues de rendu, vues enregistrées, lecture
+  (`tabs::DocState`, échangé avec `AppState` champ par champ) ; modèle, matériaux, navigation et état des envois
+  (`DocData`). Réglages, éclairage, panneaux et fenêtres sont communs. Sur le GPU, chaque onglet garde sa
+  géométrie, sa table de matériaux et ses textures (`SceneRenderer::open_doc` / `select_doc` / `close_doc`,
+  même chose en OpenGL) ; l'environnement est partagé. Changer d'onglet ne renvoie rien.
+- Accueil (au lancement, et onglet maison) : recherche (Ctrl F), « Ouvrir… », fichiers récents en cartes
+  (vignette sur le dégradé de la vue du thème, format, taille, date relative ; chemin en info-bulle). Épinglés en
+  tête et hors de la limite de 16 ; épingler et retirer au survol ; fichier absent grisé avec une alerte. Sans
+  récent : la zone d'ouverture (D-29). L'ancien menu des récents sous le nom du fichier disparaît.
+  `recents.json` garde la date d'ouverture et l'épingle (l'ancienne liste de chemins est reprise).
+- Vignettes : 512 × 320, modèle cadré en 16:10 sous l'éclairage courant, fond transparent ; rendues à
+  l'ouverture (un onglet en arrière-plan est installé le temps du rendu, ses données GPU restent prêtes) avec
+  les pipelines de la scène pour le format des images hors écran (`SceneRenderer::select_format`, sans recréer
+  la scène) ; gardées dans le dossier de cache (`Obview 3D/vignettes`, PNG), relues au lancement.
+- Images en couleurs de l'interface : couche nouvelle d'`obv-ui` (`photos.rs`), tableau de 48 couches RGBA sRGB
+  à 5 niveaux de détail (Vulkan et OpenGL), niveau choisi d'après le rapport texels / pixels, coins arrondis ;
+  l'atlas 8 bits (glyphes, icônes, logo) n'aurait pas tenu des vignettes ni su les libérer.
+- Aperçu au survol d'un onglet inactif (après le délai des info-bulles) : vignette 240 × 150, nom, dossier.
+
+En suspens : la vignette d'un fichier modifié hors d'Obview n'est refaite qu'à sa prochaine ouverture.
+
+## D-42 · Multivue (25/11/2026)
+
+Demande : glisser un onglet d'un modèle ouvert démarre une multivue « à la façon de Windows avec snapping et
+outline preview » ; onglets de la multivue reliés ; « L » pour lier les vues ; bouton de disposition seulement en
+multivue.
+
+- Glisser un onglet sous la barre : son nom suit le pointeur, la moitié visée de la vue (bord le plus proche dans
+  le tiers extérieur) ou toute la vue (centre : l'onglet y remplace le fichier montré) est contournée, avec une
+  transition de 90 ms ; au lâcher, la vue se partage. L'onglet actif lui-même peut être glissé : deux vues du
+  même fichier (deux rendus). Quatre vues au plus.
+- Disposition en arbre de partages (rapport réglable par le séparateur, double-clic : moitié) ; chaque vue a son
+  contour (plus marqué pour l'active), sa puce en haut à gauche (fichier, rendu s'il n'est pas l'éclairé, menu :
+  onglet montré, fermer la vue) et son gizmo. La vue active reçoit navigation, sélection, outils, panneaux et
+  compteur (sous la puce) ; un appui dans une autre vue la rend active et agit aussitôt. La barre des outils se
+  centre sous la vue active.
+- Onglets de la multivue côte à côte dans la barre, dans un même cadre. Choisir un autre onglet l'affiche seul ;
+  revenir à un onglet du groupe rend la multivue.
+- Bouton « Disposition » (barre du bas, seulement en multivue) : vue unique, deux colonnes, deux rangées, une et
+  deux, quatre vues (vues ajoutées : fichier de la vue active), caméras liées, sélection liée (même nom de pièce).
+- Caméras liées (L, ou le rond au milieu du premier séparateur) : les autres vues prennent l'orientation et la
+  projection de l'active ; même fichier, même caméra ; autre fichier, distance et décalage rapportés aux sphères
+  englobantes.
+- Rendu : une image trace chaque vue avec son document (`PaneView`), anneau de 24 blocs de paramètres.
+
+En suspens : enregistrer la disposition avec les onglets (la réouverture de séance a été refusée) ; lier aussi la
+coupe et l'éclaté.
+
+## D-43 · Icônes revues (25/11/2026)
+
+Demande : trop d'icônes se ressemblaient. Planche validée le 25/11 : mesure (règle), coupe (plan et normale),
+éclaté (carrés décalés, flèches en coin), capture (photo), vues (trièdre, remplace l'appareil photo), assemblage
+(arbre), affichage (curseurs), barre d'outils (barre et points), œil barré, miroir ; nouvelles : accueil,
+disposition, lien, épingle.
