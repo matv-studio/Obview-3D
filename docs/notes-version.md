@@ -21,6 +21,20 @@ Réglages › Mises à jour).
   fermer le message, puis Réglages Système → Confidentialité et sécurité → section Sécurité → « Ouvrir quand
   même » (bouton affiché environ une heure après la tentative), confirmer par mot de passe ou Touch ID.
 
+## Nouveautés de 0.4.0
+
+- Onglets : plusieurs fichiers dans une même fenêtre (bouton + ou Ctrl T, Ctrl W pour fermer, Ctrl Tab pour
+  passer de l'un à l'autre, Ctrl 1 à 9, Ctrl Maj T pour rouvrir le dernier fermé, clic milieu pour fermer,
+  glisser pour réordonner) ; aperçu du modèle au survol d'un onglet. Plusieurs fichiers déposés ou passés en
+  ligne de commande s'ouvrent chacun dans un onglet.
+- Page d'accueil (Home) au lancement : fichiers récents en vignettes, recherche, épingler, retirer de la liste.
+- Multivue : glisser un onglet dans la vue la partage (moitié contournée pendant le glisser), jusqu'à quatre
+  vues ; bouton « Layout » de la barre du bas pour la disposition, caméras liées (touche L) et sélection liée.
+  Le même fichier peut paraître dans deux vues, par exemple éclairé et en topologie.
+- Vues de rendu : un clic sur la vue éclairée (à droite) ferme les bandes ; dans un rendu isolé, un clic dans le
+  vide les rouvre.
+- Icônes revues.
+
 ## Nouveautés de 0.3.1
 
 - Mises à jour : bouton « Version x.y.z » en haut à droite quand une version est disponible ; un clic propose
@@ -34,7 +48,7 @@ Réglages › Mises à jour).
   environnement en arrière-plan (flou réglable), teinte ; Shift + glisser avec le bouton droit pour tourner le
   dôme. Onglet « Lighting » du panneau de droite.
 - Menu des vues enregistrées : bouton caméra en haut à droite de la vue.
-- Fichiers récents : clic sur le nom du fichier dans la barre du haut.
+- Fichiers récents : clic sur le nom du fichier dans la barre du haut (remplacé par la page d'accueil en 0.4.0).
 - Bouton de la barre du bas (Ctrl + \) pour masquer ou montrer les deux panneaux ; compteur triangles et
   sommets dans la vue quand le panneau de gauche est masqué.
 - Nouveau logo.

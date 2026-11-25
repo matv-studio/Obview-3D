@@ -92,9 +92,9 @@ Mis à jour : 25/11/2026.
 - Étude préalable (« STL Remesh ») et analyse des fichiers d'essai de l'utilisateur : voir D-07.
 
 ## Prochaines étapes
-00. Onglets et multivue (D-41, D-42) vérifiés sous Xvfb (Vulkan et OpenGL) et par les captures `onglets_*`,
-   `recents_*`, `multivue_*`, `multivue_depot_*` ; à essayer par l'utilisateur sur une vraie machine, puis
-   nouvelle version.
+00. Version 0.4.0 (onglets, accueil, multivue, D-40 à D-43) : brouillon préparé par `version.yml` le 25/11, à
+   publier par l'utilisateur comme version normale (v0.3.1 a été publiée en préversion : les copies qui ne
+   reçoivent pas les préversions ne la voient pas).
 0. Brouillon de version v0.3.1 (installateurs Windows, macOS, Linux) préparé par `version.yml` : à essayer et
    publier par l'utilisateur, comme version normale (pas préversion) pour que les copies 0.3.0 la voient ; v0.3.0 est publiée (préversion) ; v0.2.1 est publiée (archives .zip, sans recherche de mises à jour : passage à 0.3.0 à la main) ; le brouillon v0.1.0 est dépassé. Archives 0.2.0 : Windows 10,8 Mo, macOS 14,7 Mo. Application macOS jamais lancée sur un Mac réel :
    en CI (`macos-26`), le chargeur livré trouve le pilote KosmicKrisp, qui ne voit aucun GPU utilisable dans
